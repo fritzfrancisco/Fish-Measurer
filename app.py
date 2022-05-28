@@ -2,11 +2,66 @@ import tkinter as tk
 from tkinter import *
 from tkinter import filedialog
 import os
-from tkinter.font import BOLD
 from turtle import bgcolor, width
+from typing import Dict
+from pypylon import pylon
+from datetime import datetime, time
+import json
+from PIL import Image, ImageTk
+import cv2
 
-from cv2 import threshold
+# Get the available cameras
+tlFactory = pylon.TlFactory.GetInstance()
+devices = tlFactory.EnumerateDevices()
+if len(devices) == 0:
+    raise pylon.RuntimeException("No camera present.")
 
+## Create and attach all Pylon Devices.
+cameras = pylon.InstantCameraArray(len(devices))
+for i, cam in enumerate(cameras):
+    cam.Attach(tlFactory.CreateDevice(devices[i]))
+
+global currentCam
+currentCam = cameras[0]
+currentCam.Open()
+currentCam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+    
+def UpdateCamera():
+    global currentCam
+    global cameras
+    global frame
+    
+    # Wait for an image and then retrieve it. A timeout of 5000 ms is used.
+    grabResult = currentCam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+
+    # Image grabbed successfully?
+    if grabResult.GrabSucceeded():
+        image = converter.Convert(grabResult)
+        img = image.GetArray()
+        
+        img = cv2.resize(img, None, fy=.39, fx=.39)
+        img = cv2.putText(img, datetime.now().strftime("%Y%m%d %H:%M:%S"), (
+            15, img.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, lineType=cv2.LINE_AA)
+        
+        #Update the image to tk...
+        frame=cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
+        img_update = ImageTk.PhotoImage(Image.fromarray(frame))
+        paneeli_image.configure(image=img_update)
+        paneeli_image.image=img_update
+        paneeli_image.update()
+        
+        k = cv2.waitKey(1)
+        if k == 27:
+            currentCam.StopGrabbing()
+            currentCam.Close()
+            cv2.destroyAllWindows()
+    else:
+        print("Error: ", grabResult.ErrorCode, grabResult.ErrorDescription)
+    
+    paneeli_image.after(15, UpdateCamera)
+    
+
+# Create the app
 rootWindow = tk.Tk()
 rootWindow.geometry("1422x800")
 rootWindow.title('Fish Measurer')
@@ -15,18 +70,23 @@ rootWindow.columnconfigure(1, weight=1)
 
 settingsFrame = tk.Frame(relief='flat')
 settingsFrame.configure(background="grey80")
-
-# canvas = tk.Canvas(settingsFrame)
-
-# scrollbar  = Scrollbar(settingsFrame, command=canvas.yview)
-# scrollbar.pack(side = RIGHT, fill = Y)
-# scrollable_frame = tk.Frame(canvas)
-
-
 settingsFrame.grid(row = 0, column = 0, sticky='ns')
 
+## -- VIDEO -------------------------------------------------------------------------------------------
+videoFrame = tk.Frame(master=rootWindow, relief='flat', borderwidth=2, padx=5, pady=5, bg="grey5")
+videoFrame.grid(row=0, column=1, sticky="nsew")
+
+paneeli_image=tk.Label(videoFrame) #,image=img)
+paneeli_image.pack(fill=tk.BOTH, expand=True)
+
+# converter for opencv bgr format
+converter = pylon.ImageFormatConverter()
+converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+
+            
 ## -- CAMERA SETTINGS --------------------------------------------------------------------------------
-cameraFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=5, pady=10, bg="grey80")
+cameraFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=2, pady=10, bg="grey80")
 cameraFrame.pack(fill=tk.X)
 
 # Camera settings title
@@ -45,14 +105,26 @@ manualFillPrompt = tk.Label(text="Choose camera:", master=dropdownFrame, bg="gre
 manualFillPrompt.config(font=("Courier", 10))
 manualFillPrompt.pack(fill=tk.X)
 
-OPTIONS = [
-"Camera-1",
-"Camera-2",
-"Camera-3"
-]
-variable = StringVar(rootWindow)
-variable.set(OPTIONS[0]) # default value
-w = OptionMenu(dropdownFrame, variable, *OPTIONS)
+def ChangeCamera(newCam):
+    global currentCam
+    currentCam.StopGrabbing()
+    currentCam.Close()
+    print("from: " + currentCam + "; to: " + newCam)
+    
+    currentCam = newCam
+    currentCam.Open()
+    currentCam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+
+camsDict = {}
+CAMOPTIONS = []
+for i, cam in enumerate(cameras):
+    CAMOPTIONS.append(str(cam.GetDeviceInfo().GetModelName()))
+    camsDict[i] = cam
+
+camSelectVariable = StringVar()
+camSelectVariable.set(CAMOPTIONS[0]) # default value
+camSelectVariable.trace_add('write', lambda *args, newCam = camsDict[CAMOPTIONS.index(camSelectVariable.get())]: ChangeCamera)
+w = OptionMenu(dropdownFrame, camSelectVariable, *CAMOPTIONS)
 w["highlightthickness"] = 0
 w.pack(fill=tk.X)
 
@@ -60,9 +132,60 @@ w.pack(fill=tk.X)
 cameraSettingsFrame = tk.Frame(master=cameraFrame, relief='flat', borderwidth=2, padx=5, pady=5, bg="grey60")
 cameraSettingsFrame.pack(fill=tk.X)
 
-def UploadAction(event=None):
+# dictionary = {
+#     "exposure" : 2000,
+#     "gain" : "2",
+#     "duration" : 8.6,
+#     "framerate" : 44,
+#     "threshold" : 150
+# }
+
+# with open('result.json', 'w') as fp:
+#     json.dump(dictionary, fp)
+
+def UploadAction():
     filename = filedialog.askopenfilename()
-    print('Selected:', filename)
+    
+    if filename:
+        # Opening JSON file
+        with open(filename) as json_file:
+            data = json.load(json_file)
+            
+            uploadFailed = []
+            if "exposure" in data:
+                exposureEntry.delete(0, END)
+                exposureEntry.insert(0, data["exposure"]) 
+            else:
+                uploadFailed.append("exposure")
+                
+            if "gain" in data:
+                if data["gain"] in GAINOPTIONS:
+                    gainVariable.set(GAINOPTIONS[GAINOPTIONS.index(data["gain"])])
+                else:
+                    uploadFailed.append("gain")
+            else:
+                uploadFailed.append("gain")
+                
+            if "duration" in data:
+                durationEntry.delete(0, END)
+                durationEntry.insert(0, data["duration"]) 
+            else:
+                uploadFailed.append("duration")
+                
+            if "framerate" in data:
+                framerateEntry.delete(0, END)
+                framerateEntry.insert(0, data["framerate"]) 
+            else:
+                uploadFailed.append("framerate")
+                
+            if "threshold" in data:
+                thresholdValueEntry.delete(0, END)
+                thresholdValueEntry.insert(0, data["threshold"]) 
+            else:
+                uploadFailed.append("threshold")
+            
+            if uploadFailed:
+                tk.messagebox.showerror("Config File Errors", "The following parameters were not updated due to parsing errors:\n\n" + str(uploadFailed))
 
 button = tk.Button(cameraSettingsFrame, text='Upload .config file', command=UploadAction)
 button.pack(fill=tk.X)
@@ -76,6 +199,7 @@ inputsFrame.pack(fill=tk.X)
 inputsFrame.columnconfigure(0)
 inputsFrame.columnconfigure(1, weight=1)
 
+# Settings inputs
 exposureText = tk.Label(text="Exposure (ms): ", master=inputsFrame, pady=3)
 exposureEntry = tk.Entry(inputsFrame, justify='center')
 exposureEntry.insert(0, "50000") 
@@ -83,14 +207,14 @@ exposureText.grid(row = 0, column = 0, sticky='w', padx=5)
 exposureEntry.grid(row = 0, column = 1, sticky='ew', padx=5)
 
 gainSetting = tk.Label(text="Gain Setting: ", master=inputsFrame)
-OPTIONS = [
+GAINOPTIONS = [
 "Once",
 "Continuous",
 "Off"
 ]
-variable = StringVar(rootWindow)
-variable.set(OPTIONS[0]) # default value
-w = OptionMenu(inputsFrame, variable, *OPTIONS)
+gainVariable = StringVar()
+gainVariable.set(GAINOPTIONS[0]) # default value
+w = OptionMenu(inputsFrame, gainVariable, *GAINOPTIONS)
 w["highlightthickness"] = 0
 w.grid(row = 1, column = 1, sticky='ew', padx=5)
 gainSetting.grid(row = 1, column = 0, sticky='w', padx=5)
@@ -114,7 +238,7 @@ thresholdValue.grid(row = 4, column = 0, sticky='w', padx=5)
 thresholdValueEntry.grid(row = 4, column = 1, sticky='ew', padx=5)
 
 ## -- OUTPUT SETTINGS -----------------------------------------------------------------------------------------------
-outputFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=5, pady=10, bg="grey80")
+outputFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=2, pady=10, bg="grey80")
 outputFrame.pack(fill=tk.BOTH)
 
 # Camera settings title
@@ -141,15 +265,16 @@ browseFrame.pack(fill=tk.X)
 
 def BrowseButton():
     global folder_path
-    filename = filedialog.askdirectory()
-    folder_path.set(filename)
-    print(filename)
+    folderName = filedialog.askdirectory()
+    folder_path.set(folderName)
+    print(folderName)
     
 button = tk.Button(browseFrame, text='Browse...', command=BrowseButton)
 button.grid(row=0, column=0, sticky="nsew")
 
 folder_path = StringVar()
-selectedFolder = Label(master=browseFrame, textvariable=folder_path, width=31)
+folder_path.set(os.getcwd())
+selectedFolder = Label(master=browseFrame, textvariable=folder_path, width=31, anchor='e')
 selectedFolder.grid(row=0, column=1, sticky="nsew")
 
 # File format selector
@@ -167,9 +292,9 @@ OPTIONS = [
 ".png",
 ".tiff"
 ]
-variable = StringVar(rootWindow)
-variable.set(OPTIONS[0]) # default value
-w = OptionMenu(formatFrame, variable, *OPTIONS)
+outputFormatVariable = StringVar()
+outputFormatVariable.set(OPTIONS[0]) # default value
+w = OptionMenu(formatFrame, outputFormatVariable, *OPTIONS)
 w["highlightthickness"] = 0
 w.grid(row = 0, column = 1, sticky='ew', padx=5, pady=5)
 
@@ -204,16 +329,11 @@ startFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=1
 startFrame.pack(fill=tk.BOTH)
 
 def StartButton(event=None):
-    filename = filedialog.askopenfilename()
-    print('Selected:', filename)
+    print("hi")
+    
 startButton = tk.Button(startFrame, text='START', command=StartButton, bg="red", font=("Courier", 24), fg="white")
 startButton.pack(fill=tk.BOTH)
 
-## -- VIDEO -------------------------------------------------------------------------------------------
-videoFrame = tk.Frame(master=rootWindow, relief='flat', borderwidth=2, padx=5, pady=5, bg="grey5")
-videoFrame.grid(row=0, column=1, sticky="nsew")
 
-additionalText = tk.Text(videoFrame, height=120, width=120)
-additionalText.pack(fill=tk.BOTH)
-
+paneeli_image.after(15, UpdateCamera)
 rootWindow.mainloop()
