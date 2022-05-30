@@ -3,7 +3,7 @@ from pypylon import pylon
 from datetime import datetime, time
 from PIL import Image, ImageTk
 import cv2
-
+import sys
 
 class Cameras():
     
@@ -12,23 +12,28 @@ class Cameras():
         tlFactory = pylon.TlFactory.GetInstance()
         devices = tlFactory.EnumerateDevices()
         if len(devices) == 0:
-            raise pylon.RuntimeException("No camera present.")
-
-        ## Create and attach all Pylon Devices.
-        Cameras.cameras = pylon.InstantCameraArray(len(devices))
-        for i, cam in enumerate(Cameras.cameras):
-            cam.Attach(tlFactory.CreateDevice(devices[i]))
-            
-        Cameras.currentCam = Cameras.cameras[0]
-        self.ChangeCamera(Cameras.currentCam)
+            Cameras.connected = False # will automatically shut down app in constructor
+        else:
+            ## Create and attach all Pylon Devices.
+            Cameras.cameras = pylon.InstantCameraArray(len(devices))
+            for i, cam in enumerate(Cameras.cameras):
+                cam.Attach(tlFactory.CreateDevice(devices[i]))
+                
+            Cameras.currentCam = Cameras.cameras[0]
+            Cameras.connected = True
+            self.ChangeCamera(Cameras.currentCam)
         
         # converter for opencv bgr format
         Cameras.converter = pylon.ImageFormatConverter()
         Cameras.converter.OutputPixelFormat = pylon.PixelType_BGR8packed
         Cameras.converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
     
-    def ApplySettings(self, **kwargs):
-        pass
+    def ApplySettings(**kwargs):
+        Cameras.currentCam.ExposureTime.SetValue(float(kwargs["exposure"]))
+        Cameras.currentCam.GainAuto.SetValue(kwargs["gain"])
+        Cameras.currentCam.AcquisitionFrameRateEnable.SetValue(True)
+        Cameras.currentCam.AcquisitionFrameRate.SetValue(float(kwargs["framerate"]))
+        Cameras.images_to_grab = kwargs["framerate"] * kwargs["duration"]
     
     def ChangeCamera(self, newCamera):
         if Cameras.currentCam.IsGrabbing():
@@ -39,7 +44,7 @@ class Cameras():
         Cameras.currentCam.Open()
         Cameras.currentCam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
 
-    def UpdateCamera(self, fishID=None, addText=None):
+    def UpdateCamera(fishID=None, addText=None):
         # Wait for an image and then retrieve it. A timeout of 5000 ms is used.
         grabResult = Cameras.currentCam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
 
@@ -74,6 +79,5 @@ class Cameras():
             
             return img_update
         else:
-            print("Error: ", grabResult.ErrorCode, grabResult.ErrorDescription)
             return None
         

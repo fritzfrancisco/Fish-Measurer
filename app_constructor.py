@@ -7,17 +7,22 @@ import json
 from DigitEntry import DigitEntry
 from MeasurerInstance import MeasurerInstance
 from Cameras import Cameras
-
+import sys
 
 class ConstructApp():
     def __init__(self, **kwargs):
+             
         # Create the app
         rootWindow = tk.Tk()
         rootWindow.geometry("1422x800")
         rootWindow.title('Fish Measurer')
         rootWindow.columnconfigure(0)
         rootWindow.columnconfigure(1, weight=1)
-
+        
+        if not Cameras.connected:
+            tk.messagebox.showerror("Camera Connection Error", "The app cannot find a camera connected to this device. Please verify the connection and try again.")
+            sys.exit()
+            
         settingsFrame = tk.Frame(relief='flat')
         settingsFrame.configure(background="grey80")
         settingsFrame.grid(row = 0, column = 0, sticky='ns')
@@ -30,13 +35,16 @@ class ConstructApp():
         paneeli_image.pack(fill=tk.BOTH, expand=True)
 
         def UpdateFeed():
-            newImage = kwargs["camera"].UpdateCamera(fishID=fishIDEntry.get(), addText=additionalText.get("1.0",'end-1c'))
+            newImage = Cameras.UpdateCamera(fishID=fishIDEntry.get(), addText=additionalText.get("1.0",'end-1c'))
             
             if newImage != None:
                 paneeli_image.configure(image=newImage)
                 paneeli_image.image=newImage
                 paneeli_image.update()
                 paneeli_image.after(15, UpdateFeed)
+            else:
+                tk.messagebox.showerror("Camera Connection Error", "The app cannot find a camera connected to this device. Please verify the connection and try again.")
+                sys.exit()
                 
         ## -- CAMERA SETTINGS --------------------------------------------------------------------------------
         cameraFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=2, pady=10, bg="grey80")
@@ -128,7 +136,7 @@ class ConstructApp():
         inputsFrame.columnconfigure(1, weight=1)
 
         # Settings inputs
-        exposureSetting = DigitEntry("Exposure (ms): ", 50000, 0, inputsFrame)
+        exposureSetting = DigitEntry("Exposure (ms): ", 10000, 0, inputsFrame)
 
         gainSetting = tk.Label(text="Gain Setting: ", master=inputsFrame)
         GAINOPTIONS = [
