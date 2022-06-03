@@ -8,6 +8,8 @@ from DigitEntry import DigitEntry
 from MeasurerInstance import MeasurerInstance
 from Cameras import Cameras
 import sys
+import threading
+
 
 class ConstructApp():
     def __init__(self, **kwargs):
@@ -33,18 +35,28 @@ class ConstructApp():
 
         paneeli_image=tk.Label(videoFrame) #,image=img)
         paneeli_image.pack(fill=tk.BOTH, expand=True)
-
+        
         def UpdateFeed():
-            newImage = Cameras.UpdateCamera(fishID=fishIDEntry.get(), addText=additionalText.get("1.0",'end-1c'))
-            
+            # print(datetime.now().strftime("%d.%m.%Y %H:%M:%S"))
+            if Cameras.pulling:
+                newImage = MeasurerInstance.binarized_image
+                # print("pulling")
+            else:
+                newImage = Cameras.UpdateCamera(fishID=fishIDEntry.get(), addText=additionalText.get("1.0",'end-1c'))
+                # print("not pulling")
             if newImage != None:
+                # print("an image")
                 paneeli_image.configure(image=newImage)
                 paneeli_image.image=newImage
                 paneeli_image.update()
                 paneeli_image.after(15, UpdateFeed)
             else:
-                tk.messagebox.showerror("Camera Connection Error", "The app cannot find a camera connected to this device. Please verify the connection and try again.")
-                sys.exit()
+                if not Cameras.pulling:
+                    tk.messagebox.showerror("Camera Connection Error", "The app cannot find a camera connected to this device. Please verify the connection and try again.")
+                    sys.exit()
+                else:
+                    # print("image None")
+                    paneeli_image.after(15, UpdateFeed)
                 
         ## -- CAMERA SETTINGS --------------------------------------------------------------------------------
         cameraFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=2, pady=10, bg="grey80")
@@ -245,6 +257,9 @@ class ConstructApp():
         ## -- START BUTTON -----------------------------------------------------------------------------------
         startFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=10, pady=10, bg="grey80")
         startFrame.pack(fill=tk.BOTH)
+        
+        # def tester(dict):
+        #     measurer = MeasurerInstance(dict)
 
         def StartButton(event=None):
             # Assemble measurer instance dictionary
@@ -257,8 +272,13 @@ class ConstructApp():
             instanceDict["folder"] = folder_path.get()
             instanceDict["format"] = outputFormatVariable.get()
             
-            # Declare class and get cracking
             measurer = MeasurerInstance(instanceDict)
+            
+            # Declare class and get cracking
+            # x = threading.Thread(target=tester, args=(instanceDict,), daemon=True)
+            # x.start()
+            
+            ## cannot communicate variables across the threads, need to find some other means of communication
             
         startButton = tk.Button(startFrame, text='START', command=StartButton, bg="red", font=("Courier", 24), fg="white")
         startButton.pack(fill=tk.BOTH)

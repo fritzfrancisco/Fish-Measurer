@@ -21,12 +21,14 @@ class Cameras():
                 
             Cameras.currentCam = Cameras.cameras[0]
             Cameras.connected = True
-            self.ChangeCamera(Cameras.currentCam)
+            Cameras.ChangeCamera(Cameras.currentCam)
         
         # converter for opencv bgr format
         Cameras.converter = pylon.ImageFormatConverter()
         Cameras.converter.OutputPixelFormat = pylon.PixelType_BGR8packed
         Cameras.converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+        
+        Cameras.pulling = False
     
     def ApplySettings(**kwargs):
         Cameras.currentCam.ExposureTime.SetValue(float(kwargs["exposure"]))
@@ -34,15 +36,47 @@ class Cameras():
         Cameras.currentCam.AcquisitionFrameRateEnable.SetValue(True)
         Cameras.currentCam.AcquisitionFrameRate.SetValue(float(kwargs["framerate"]))
         Cameras.images_to_grab = kwargs["framerate"] * kwargs["duration"]
-    
-    def ChangeCamera(self, newCamera):
+        
+    def StopGrabbing():
         if Cameras.currentCam.IsGrabbing():
             Cameras.currentCam.StopGrabbing()
             Cameras.currentCam.Close()
+    
+    def ChangeCamera(newCamera):
+        Cameras.StopGrabbing()
                 
         Cameras.currentCam = newCamera
         Cameras.currentCam.Open()
         Cameras.currentCam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+    
+    def GetImages():
+        Cameras.pulling = True
+        Cameras.StopGrabbing()
+        
+        Cameras.currentCam.Open()
+        Cameras.currentCam.StartGrabbingMax(int(Cameras.images_to_grab), pylon.GrabStrategy_OneByOne)
+        Cameras.image_list = []
+        
+        while Cameras.currentCam.IsGrabbing():
+            # Wait for an image and then retrieve it. A timeout of 5000 ms is used.
+            grabResult = Cameras.currentCam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+
+            # Image grabbed successfully?
+            if grabResult.GrabSucceeded():
+                # Access the image data.
+                # print("SizeX: ", grabResult.Width)
+                # print("SizeY: ", grabResult.Height)
+                img = grabResult.Array
+                Cameras.image_list.append(img)
+                # print("Gray value of first pixel: ", img[0, 0])
+            else:
+                print("Error: ", grabResult.ErrorCode, grabResult.ErrorDescription)
+                
+            grabResult.Release()
+            
+        Cameras.pulling = False
+        Cameras.ChangeCamera(Cameras.currentCam)
+        return Cameras.image_list
 
     def UpdateCamera(fishID=None, addText=None):
         # Wait for an image and then retrieve it. A timeout of 5000 ms is used.
