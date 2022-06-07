@@ -1,4 +1,4 @@
-from typing import Type
+from typing import Any, Type
 from Cameras import Cameras
 import matplotlib.pyplot as plt
 from skimage.morphology import medial_axis, skeletonize
@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 from fil_finder import FilFinder2D
 import astropy.units as u
+import math
 
 class MeasurerInstance():
     
@@ -21,6 +22,8 @@ class MeasurerInstance():
         # image_array = Cameras.GetImages()
         
         # return a list of n X m frames with (n,m) being the pixel and the entry the [0,255] color value:
+        MeasurerInstance.max_curvature = 0.46
+        MeasurerInstance.current_best = {}
         self.image_array = MeasurerInstance.Video_to_Frames()
         
         # masker = self.background.apply(self.image_array[-1])
@@ -95,50 +98,47 @@ class MeasurerInstance():
                 kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
                 closing = cv2.morphologyEx(im_bw, cv2.MORPH_CLOSE, kernel, iterations=3)
                 opening = cv2.morphologyEx(closing, cv2.MORPH_CLOSE, kernel)
-                # dilated = cv2.dilate(im_bw.copy(), None, iterations=15)
-                # eroded = cv2.erode(dilated.copy(), None, iterations=17)
-                dst = cv2.addWeighted(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY),0.7,opening,0.3,0)
                 
-                # if cap.get(1) >= cap.get(cv2.CAP_PROP_FRAME_COUNT) * 0.6:
-                if cap.get(1) == 80:
-                    thinned = cv2.ximgproc.thinning(opening)
+                gradient = cv2.morphologyEx(opening, cv2.MORPH_GRADIENT, kernel)
+                
+                # get distance from filament end points to each non-zero element of the gradient array
+                # - angles are all lines to the left of the y-axis, and + are those laying to the right, all going through the origin
+                ## and therefore continuing under the x-axis.
+                
+                # temp = cv2.resize(gradient, None, fy=0.7, fx=0.7)
+                # cv2.imshow('gradient', temp) 
+                
+                dst = cv2.addWeighted(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY),0.7,opening,0.3,0)
+                dst = cv2.addWeighted(gradient,0.2,dst,0.8,0)
+                
+                if cap.get(1) >= cap.get(cv2.CAP_PROP_FRAME_COUNT) * 0.4:
+                    print("frame: " + str(cap.get(1)))
+                    skeleton_mask = cv2.ximgproc.thinning(opening)
                     # https://stackoverflow.com/questions/53481596/python-image-finding-largest-branch-from-image-skeleton
-                    fil = FilFinder2D(thinned, distance=1500*u.pix, mask=thinned)
-                    fil.preprocess_image(flatten_percent=85)
+                    fil = FilFinder2D(skeleton_mask, distance=1500*u.pix, mask=skeleton_mask)
                     fil.create_mask(verbose=False, use_existing_mask=True)
                     fil.medskel(verbose=False)
                     fil.analyze_skeletons(skel_thresh=50*u.pix)
                     
-                    # fil.find_widths(max_dist=1.2*u.pix)
-                    # FilFinder2D.Filament2D.find_widths(image=fil.skeleton, max_dist=150*u.pix)
+                    (accepted, statement) = MeasurerInstance.AssessFilament(fil, cap.get(1), dst)
+                    print(statement)
+                    if not accepted:
+                        continue
                     
-                    # plt.imshow(fil.skeleton, cmap='gray')
-                    # plt.contour(fil.skeleton_longpath, colors='r')
-                    # plt.axis('off')
-                    # plt.show()
-                    
-                    # print(fil.lengths(u.pix))
-                    # print(fil.filaments)
-                    
-                    ## curvature analyses
-                    ## max length with straightness tolerance satisfied
+
                     ## idea for missing head length needed
-                    
-                    skeleton_Mat = (fil.skeleton_longpath * 255).astype('uint8')
-                    dst = cv2.addWeighted(dst,0.5,skeleton_Mat,0.5,0)
-                    # temp = cv2.resize(dst, None, fy=0.7, fx=0.7)
-                    cv2.imshow('binarized', dst)    
-                    
+                    # need to consider extent sitting outside of boundary
+
                 
-                # img = cv2.putText(thinned, str(cap.get(1)), (100, 100), cv2.FONT_HERSHEY_DUPLEX, 3, (255, 255, 255), lineType=cv2.LINE_AA)
-                # temp = cv2.resize(dst, None, fy=0.7, fx=0.7)
-                # cv2.imshow('binarized', dst)    
+                # img = cv2.putText(dst, str(cap.get(1)), (100, 100), cv2.FONT_HERSHEY_DUPLEX, 3, (255, 255, 255), lineType=cv2.LINE_AA)
+                # temp = cv2.resize(img, None, fy=0.7, fx=0.7)
+                # cv2.imshow('binarized', temp)    
                 
-                images.append(im_bw)
+                images.append(opening)
                 pos_frame = cap.get(1)
             else:
                 # The next frame is not ready, so we try to read it again
-                cap.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, pos_frame-1)
+                cap.set(cv2.CAP_PROP_FRAME_COUNT, pos_frame-1)
                 # It is better to wait for a while for the next frame to be ready
                 cv2.waitKey(1000)
 
@@ -147,12 +147,71 @@ class MeasurerInstance():
             if cap.get(1) == cap.get(cv2.CAP_PROP_FRAME_COUNT):
                 # If the number of captured frames is equal to the total number of frames,
                 # we stop
+                print("\nFinal: " + str(MeasurerInstance.current_best["curvature"]) + "; " + str(MeasurerInstance.current_best["length"]) + "; " + str(MeasurerInstance.current_best["frame"]))
                 break
             
-        MeasurerInstance.binarized_image = None
         return images
         
+    def AssessFilament(fil, frame, dst):
+        filament = None
+        try:
+            if len(fil.lengths()) > 1:
+                lengths = [q.value for q in fil.lengths()]
+                index = lengths.index(max(fil.lengths()).value)
+                filament = fil.filaments[index]
+            else:
+                filament = fil.filaments[0]
+        except:
+            return (False, "could not grab filament")
+            
+        long_path = fil.skeleton_longpath
+        fil_length = filament.length(u.pix).value
 
+        # plt.imshow(filament.skeleton(pad_size=10,out_type='longpath'))
+            
+        # print("extents: " + str(fil.filament_extents))
+        # print("endpts: " + str(filament.end_pts))
+        # print("length: " + str(filament.length(u.pix)))
+        # print("LPPC: " + str(filament.longpath_pixel_coords))
+
+        if not any(MeasurerInstance.current_best):
+            filament.rht_analysis()
+            fil_curvature = filament.curvature.value
+            print(filament.orientation.value * 180 / math.pi, fil_curvature, fil_length)
+            
+            if fil_curvature < MeasurerInstance.max_curvature:
+                MeasurerInstance.current_best = {"curvature": fil_curvature, "length": fil_length, "frame": frame, "image": None}
+            
+                skeleton_Mat = (long_path * 255).astype('uint8')
+                dst = cv2.addWeighted(dst,0.5,skeleton_Mat,0.5,0)
+                temp = cv2.resize(dst, None, fy=0.7, fx=0.7)
+                cv2.imshow('binarized', temp) 
+                return (True, "candidate accepted")
+            else:
+                return (False, "candidate too curved")
+
+        elif fil_length <= MeasurerInstance.current_best["length"]:
+            return (False, "filament too short")
+        else:
+            filament.rht_analysis()
+            fil_curvature = filament.curvature.value
+            print(filament.orientation.value * 180 / math.pi, fil_curvature, fil_length)
+            
+            if fil_curvature < MeasurerInstance.max_curvature:
+                print("candidate accepted")
+                filament.plot_rht_distrib()
+                skeleton_Mat = (long_path * 255).astype('uint8')
+                dst = cv2.addWeighted(dst,0.5,skeleton_Mat,0.5,0)
+                temp = cv2.resize(dst, None, fy=0.7, fx=0.7)
+                cv2.imshow('binarized', temp)  
+                
+                MeasurerInstance.current_best["curvature"] = fil_curvature
+                MeasurerInstance.current_best["length"] = fil_length
+                MeasurerInstance.current_best["image"] = temp
+                MeasurerInstance.current_best["frame"] = frame
+                return (True, "candidate accepted")
+            else:
+                return (False, "candidate too curved")
 
 
 measurer = MeasurerInstance()
