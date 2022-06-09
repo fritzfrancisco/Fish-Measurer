@@ -70,6 +70,8 @@ class MeasurerInstance():
     def Video_to_Frames():
         images = []
 
+        MeasurerInstance.show = True
+        
         small = True
         if small:
             cap = cv2.VideoCapture("C:/Users/james/Downloads/BaslerSmall.mp4")
@@ -99,7 +101,7 @@ class MeasurerInstance():
                 closing = cv2.morphologyEx(im_bw, cv2.MORPH_CLOSE, kernel, iterations=3)
                 opening = cv2.morphologyEx(closing, cv2.MORPH_CLOSE, kernel)
                 
-                gradient = cv2.morphologyEx(opening, cv2.MORPH_GRADIENT, kernel)
+                gradient = cv2.morphologyEx(opening, cv2.MORPH_GRADIENT, kernel) 
                 
                 # get distance from filament end points to each non-zero element of the gradient array
                 # - angles are all lines to the left of the y-axis, and + are those laying to the right, all going through the origin
@@ -111,7 +113,7 @@ class MeasurerInstance():
                 dst = cv2.addWeighted(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY),0.7,opening,0.3,0)
                 dst = cv2.addWeighted(gradient,0.2,dst,0.8,0)
                 
-                if cap.get(1) >= cap.get(cv2.CAP_PROP_FRAME_COUNT) * 0.4:
+                if cap.get(1) >= cap.get(cv2.CAP_PROP_FRAME_COUNT) * 0.65:
                     print("frame: " + str(cap.get(1)))
                     skeleton_mask = cv2.ximgproc.thinning(opening)
                     # https://stackoverflow.com/questions/53481596/python-image-finding-largest-branch-from-image-skeleton
@@ -120,7 +122,7 @@ class MeasurerInstance():
                     fil.medskel(verbose=False)
                     fil.analyze_skeletons(skel_thresh=50*u.pix)
                     
-                    (accepted, statement) = MeasurerInstance.AssessFilament(fil, cap.get(1), dst)
+                    (accepted, statement) = MeasurerInstance.AssessFilament(fil, cap.get(1), dst, gradient / 255)
                     print(statement)
                     if not accepted:
                         continue
@@ -152,7 +154,7 @@ class MeasurerInstance():
             
         return images
         
-    def AssessFilament(fil, frame, dst):
+    def AssessFilament(fil, frame, dst, gradient):
         filament = None
         try:
             if len(fil.lengths()) > 1:
@@ -166,26 +168,79 @@ class MeasurerInstance():
             
         long_path = fil.skeleton_longpath
         fil_length = filament.length(u.pix).value
-
+        
+        filament.rht_analysis()
+        fil_curvature = filament.curvature.value
+        fil_orientation = filament.orientation.value #* 180 / math.pi
+        
+        # run the intersection exercise for each end point
+        longpath_pixel_coords = filament.longpath_pixel_coords
+        end_pts = [(longpath_pixel_coords[0][0], longpath_pixel_coords[1][0]),
+                   (longpath_pixel_coords[0][-1], longpath_pixel_coords[1][-1])]
+        
+        dimensions = np.shape(dst)
+        
+        # Convert orientation to slope
+        slope = None
+        if fil_orientation > 0:
+            slope = math.pi / 2 - fil_orientation
+        elif fil_orientation < 0:
+            slope = - math.pi / 2 - fil_orientation
+                
+        for point in end_pts:
+            # Create line mask and get intersecting points
+            line_mask = np.zeros(dimensions)
+            b = dimensions[0] - point[0] - slope * (point[1])
+            
+            for x in range(dimensions[1]):
+                y = round(slope * x + b)
+                if y < dimensions[0] - 1 and y >= 0:
+                    line_mask[dimensions[0] - 1 - y, x] = 1
+                    
+            combined_array = line_mask + gradient
+            pts_of_interest = np.where(combined_array > 1)
+            
+            # Get minimum distance from both ends to contour and add to the filament length
+            minimum_distance = None
+            min_point_set = None
+            for i in range(len(pts_of_interest[0])):
+                coord = np.array([pts_of_interest[0][i], pts_of_interest[1][i]])
+                dist = np.linalg.norm(coord - np.array(point))
+                # print("int: " + str(coord), "endpt: " + str(point), "dist: " + str(dist))
+                if dist < 0: # endpoint on edge of a multi-pixel contour
+                    minimum_distance = dist
+                    min_point_set = coord
+                    break
+                else:
+                    if minimum_distance is None:
+                        minimum_distance = dist
+                        min_point_set = coord
+                    elif minimum_distance > dist:
+                        minimum_distance = dist
+                        min_point_set = coord
+                        
+            fil_length += minimum_distance
+                
+            # Fill in the line mask array with extensions
+            for x in range(point[1], min_point_set[1]):
+                y = round(slope * x + b)
+                if y < dimensions[0] - 1 and y >= 0:
+                    long_path[dimensions[0] - 1 - y, x] = 1
+                
+        # endptImage = cv2.addWeighted(blendedImage * 255,0.5,gradient*255,0.5,0)
+        # temp = cv2.resize(temp, None, fy=0.4, fx=0.4)
+        # cv2.imshow('thing', temp) 
+        # cv2.waitKey(0)
+            
+        print(slope, fil_curvature, "fil length: " + str(fil_length))
+            
+            
         # plt.imshow(filament.skeleton(pad_size=10,out_type='longpath'))
             
-        # print("extents: " + str(fil.filament_extents))
-        # print("endpts: " + str(filament.end_pts))
-        # print("length: " + str(filament.length(u.pix)))
-        # print("LPPC: " + str(filament.longpath_pixel_coords))
-
         if not any(MeasurerInstance.current_best):
-            filament.rht_analysis()
-            fil_curvature = filament.curvature.value
-            print(filament.orientation.value * 180 / math.pi, fil_curvature, fil_length)
-            
             if fil_curvature < MeasurerInstance.max_curvature:
                 MeasurerInstance.current_best = {"curvature": fil_curvature, "length": fil_length, "frame": frame, "image": None}
-            
-                skeleton_Mat = (long_path * 255).astype('uint8')
-                dst = cv2.addWeighted(dst,0.5,skeleton_Mat,0.5,0)
-                temp = cv2.resize(dst, None, fy=0.7, fx=0.7)
-                cv2.imshow('binarized', temp) 
+                image = MeasurerInstance.ShowImage(dst, (long_path * 255).astype('uint8'), resize=0.4, name="binarized") 
                 return (True, "candidate accepted")
             else:
                 return (False, "candidate too curved")
@@ -193,26 +248,24 @@ class MeasurerInstance():
         elif fil_length <= MeasurerInstance.current_best["length"]:
             return (False, "filament too short")
         else:
-            filament.rht_analysis()
-            fil_curvature = filament.curvature.value
-            print(filament.orientation.value * 180 / math.pi, fil_curvature, fil_length)
-            
             if fil_curvature < MeasurerInstance.max_curvature:
                 print("candidate accepted")
-                filament.plot_rht_distrib()
-                skeleton_Mat = (long_path * 255).astype('uint8')
-                dst = cv2.addWeighted(dst,0.5,skeleton_Mat,0.5,0)
-                temp = cv2.resize(dst, None, fy=0.7, fx=0.7)
-                cv2.imshow('binarized', temp)  
+                image = MeasurerInstance.ShowImage(dst, (long_path * 255).astype('uint8'), resize=0.4, name="binarized") 
                 
                 MeasurerInstance.current_best["curvature"] = fil_curvature
                 MeasurerInstance.current_best["length"] = fil_length
-                MeasurerInstance.current_best["image"] = temp
+                MeasurerInstance.current_best["image"] = image
                 MeasurerInstance.current_best["frame"] = frame
                 return (True, "candidate accepted")
             else:
                 return (False, "candidate too curved")
 
+    def ShowImage(image1, image2, resize=0.5, name='Image'):
+        image = cv2.addWeighted(image1,0.5,image2,0.5,0)
+        temp = cv2.resize(image, None, fy=resize, fx=resize)
+        cv2.imshow(name, temp) 
+        return image
+    
 
 measurer = MeasurerInstance()
         
