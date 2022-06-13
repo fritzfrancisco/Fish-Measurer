@@ -1,194 +1,139 @@
-from typing import Any, Type
 from Cameras import Cameras
-import matplotlib.pyplot as plt
-from skimage.morphology import medial_axis, skeletonize
 import cv2
 import numpy as np
 from fil_finder import FilFinder2D
 import astropy.units as u
 import math
+import os
+from datetime import datetime
 
 class MeasurerInstance():
     
-    def __init__(self):
-        # self.settings = settingsDict["settings"] 
-        # self.watermark = settingsDict["watermark"]
-        # self.outputFolder = settingsDict["folder"]
-        # self.format = settingsDict["format"]
+    def __init__(self, outputFolder, format, min_skel_size=0.01, max_curvature=26.35):
+        self.outputFolder = outputFolder
+        self.format = format
+        MeasurerInstance.background = MeasurerInstance.threshold = MeasurerInstance.fishID = MeasurerInstance.addText = None
         
-        # Cameras.ApplySettings(exposure=self.settings["exposure"], gain=self.settings["gain"],
-        #                       framerate=self.settings["framerate"], duration=self.settings["duration"])
+        self.max_curvature = math.pi / 180 * max_curvature
+        self.min_skel_size = MeasurerInstance.ConvertPixelsToLength(min_skel_size)
         
-        # image_array = Cameras.GetImages()
+        Cameras.ConnectMeasurer(self)
         
-        # return a list of n X m frames with (n,m) being the pixel and the entry the [0,255] color value:
-        MeasurerInstance.max_curvature = 0.46
-        MeasurerInstance.current_best = {}
-        self.image_array = MeasurerInstance.Video_to_Frames()
-        
-        # masker = self.background.apply(self.image_array[-1])
-        # temp = cv2.resize(masker, None, fy=0.3, fx=0.3)
-        # cv2.imshow('-1', temp)
-        # masker = self.background.apply(self.image_array[110])
-        # temp = cv2.resize(masker, None, fy=0.3, fx=0.3)
-        # cv2.imshow('110', temp)
-        
-        # self.ProcessImages()
-        
-    def Skeletonize(self, img):
-        # Compute the medial axis (skeleton) and the distance transform
-        skel, distance = medial_axis(img, return_distance=True)
+    def ConvertPixelsToLength(pixels):
+        return pixels * 5000
 
-        # Distance to the background for pixels of the skeleton
-        dist_on_skel = distance * skel
-
-        fig, axes = plt.subplots(2, 2, figsize=(8, 8), sharex=True, sharey=True)
-        ax = axes.ravel()
-
-        ax[1].imshow(dist_on_skel, cmap='magma')
+    def ProcessImage(self, frame):
+        self.frame = frame
+        fgmask = self.fgbg.apply(frame)
+        im_bw = cv2.threshold(fgmask, MeasurerInstance.threshold, 255, cv2.THRESH_BINARY)[1]
         
-        # filFinder stuff here too
+        # Apply morphological operations (image processing)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         
-        return 1.0 # return length
-
-    def ProcessImages(self):
-        allow = True
+        closing = cv2.morphologyEx(im_bw, cv2.MORPH_CLOSE, kernel, iterations=3)
+        self.opening = cv2.morphologyEx(closing, cv2.MORPH_CLOSE, kernel)
+        self.gradient = cv2.morphologyEx(self.opening, cv2.MORPH_GRADIENT, kernel) 
+        self.processed_image = cv2.addWeighted(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY),0.7,self.opening,0.3,0)
+        self.processed_image = cv2.addWeighted(self.gradient,0.2,self.processed_image,0.8,0)
         
-        # for i, img in enumerate(self.image_array):
+        return self.processed_image
+        
+    def TrainBackground(self):
+        background_images = Cameras.GetFixedNumFrames(Cameras.framerate* 10)
+        self.fgbg = cv2.createBackgroundSubtractorMOG2()
+        for image in background_images:
+            fgmask = self.fgbg.apply(image)
             
-            # get skeleton longest path (fil finder)
-            # add distance to contour at each extreme point for full length
-            # add length to a list            
-            # self.Skeletonize(img)    
+        self.background = fgmask
+                
+    def Skeletonize(self):
+        self.current_best = {}
+        self.current_images = {}
         
-        # average length across timespan (list)
-        # select first image
-        # watermark with length (bottom left)
-        # save to save location
-        # open (?)
+        for frame_count in range(50):
+            skeleton_mask = cv2.ximgproc.thinning(self.opening)
+            fil = FilFinder2D(skeleton_mask, distance=1500*u.pix, mask=skeleton_mask)
+            fil.create_mask(verbose=False, use_existing_mask=True)
+            fil.medskel(verbose=False)
+            
+            # Skeletons must be at least 50 pixels long to count
+            fil.analyze_skeletons(skel_thresh=self.min_skel_size*u.pix)
+            
+            # Attempt to grab the relevant filament
+            filament = None
+            try:
+                if len(fil.lengths()) > 1:
+                    lengths = [q.value for q in fil.lengths()]
+                    index = lengths.index(max(fil.lengths()).value)
+                    filament = fil.filaments[index]
+                else:
+                    filament = fil.filaments[0]
+            except:
+                print("could not grab filament")
+                continue
+                
+            long_path = fil.skeleton_longpath
+            self.current_images = {"processed": self.processed_image, "contour": self.gradient, "threshed": self.opening, "raw": self.frame, "long_path": long_path}
+            
+            (accepted, statement) = self.AssessFilament(filament)
+            print(statement)
+            if not accepted:
+                continue
+            else:
+                self.current_best["frame"] = frame_count
+
+        print("\nFinal: " + str(self.current_best["curvature"]) + "; " + str(self.current_best["length"]) + "; " + str(self.current_best["frame"]))
+        
+        chosen_image = MeasurerInstance.WatermarkImage(self.current_best)
+        
+        # Save it and open it
+        cv2.imwrite(os.path.join(
+            os.path.join(self.settingsDict["folder"], str(datetime.now().strftime("%d.%m.%Y %H:%M:%S"))),str(self.settingsDict["format"])), chosen_image)
+
+        cv2.imshow("Final Image", chosen_image) 
+        cv2.waitKey(0)
     
-    def Video_to_Frames():
-        images = []
-
-        MeasurerInstance.show = True
+    def WatermarkImage(current_best):
+        # Watermark the results
+        chosen_image = cv2.putText(current_best["images"]["processed"], 
+                                   "curvature (deg): " + str(current_best["curvature"] * 180 / math.pi + "; length (m): " + \
+                                       str(MeasurerInstance.ConvertPixelsToLength(current_best["length"]))),
+                                   current_best["curvature"]["processed"].shape[0]-20, cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), lineType=cv2.LINE_AA)
         
-        small = True
-        if small:
-            cap = cv2.VideoCapture("C:/Users/james/Downloads/BaslerSmall.mp4")
-            while not cap.isOpened():
-                cap = cv2.VideoCapture("C:/Users/james/Downloads/BaslerSmall.mp4")
-                cv2.waitKey(1000)
-        else:
-            cap = cv2.VideoCapture("C:/Users/james/Downloads/BaslerBig.mp4")
-            while not cap.isOpened():
-                cap = cv2.VideoCapture("C:/Users/james/Downloads/BaslerBig.mp4")
-                cv2.waitKey(1000)
+        # Add metadata
+        chosen_image = cv2.putText(chosen_image, datetime.now().strftime("%d.%m.%Y %H:%M:%S"), (15, 25), cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), lineType=cv2.LINE_AA)
         
-        fgbg = cv2.createBackgroundSubtractorMOG2()
+        if MeasurerInstance.fishID != None and MeasurerInstance.fishID != '':
+            chosen_image = cv2.putText(chosen_image, "Fish ID: " + MeasurerInstance.fishID, (15, 60), cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), lineType=cv2.LINE_AA)
+
+        if MeasurerInstance.addText != None and MeasurerInstance.addText != '':
+            text = MeasurerInstance.addText
+            y0, dy = 95, 25
+            for i, line in enumerate(text.split('\n')):
+                y = y0 + i*dy
+                chosen_image = cv2.putText(chosen_image, line, (15, y), cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), lineType=cv2.LINE_AA)
         
-        pos_frame = cap.get(1)
-        while True:
-            frameready, frame = cap.read() # get the frame
-            if frameready:
-                # Convert to grayscale and save
-                fgmask = fgbg.apply(frame)
-                # blurred = cv2.GaussianBlur(fgmask, (7, 7), 0)
-                im_bw = cv2.threshold(fgmask, 120, 255, cv2.THRESH_BINARY)[1]
-                
-                # im_bw = cv2.adaptiveThreshold(fgmask, 255,
-	            #     cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 4)
-                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                closing = cv2.morphologyEx(im_bw, cv2.MORPH_CLOSE, kernel, iterations=3)
-                opening = cv2.morphologyEx(closing, cv2.MORPH_CLOSE, kernel)
-                
-                gradient = cv2.morphologyEx(opening, cv2.MORPH_GRADIENT, kernel) 
-                
-                # get distance from filament end points to each non-zero element of the gradient array
-                # - angles are all lines to the left of the y-axis, and + are those laying to the right, all going through the origin
-                ## and therefore continuing under the x-axis.
-                
-                # temp = cv2.resize(gradient, None, fy=0.7, fx=0.7)
-                # cv2.imshow('gradient', temp) 
-                
-                dst = cv2.addWeighted(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY),0.7,opening,0.3,0)
-                dst = cv2.addWeighted(gradient,0.2,dst,0.8,0)
-                
-                if cap.get(1) >= cap.get(cv2.CAP_PROP_FRAME_COUNT) * 0.65:
-                    print("frame: " + str(cap.get(1)))
-                    skeleton_mask = cv2.ximgproc.thinning(opening)
-                    # https://stackoverflow.com/questions/53481596/python-image-finding-largest-branch-from-image-skeleton
-                    fil = FilFinder2D(skeleton_mask, distance=1500*u.pix, mask=skeleton_mask)
-                    fil.create_mask(verbose=False, use_existing_mask=True)
-                    fil.medskel(verbose=False)
-                    fil.analyze_skeletons(skel_thresh=50*u.pix)
-                    
-                    (accepted, statement) = MeasurerInstance.AssessFilament(fil, cap.get(1), dst, gradient / 255)
-                    print(statement)
-                    if not accepted:
-                        continue
-                    
-
-                    ## idea for missing head length needed
-                    # need to consider extent sitting outside of boundary
-
-                
-                # img = cv2.putText(dst, str(cap.get(1)), (100, 100), cv2.FONT_HERSHEY_DUPLEX, 3, (255, 255, 255), lineType=cv2.LINE_AA)
-                # temp = cv2.resize(img, None, fy=0.7, fx=0.7)
-                # cv2.imshow('binarized', temp)    
-                
-                images.append(opening)
-                pos_frame = cap.get(1)
-            else:
-                # The next frame is not ready, so we try to read it again
-                cap.set(cv2.CAP_PROP_FRAME_COUNT, pos_frame-1)
-                # It is better to wait for a while for the next frame to be ready
-                cv2.waitKey(1000)
-
-            if cv2.waitKey(10) == 27:
-                break
-            if cap.get(1) == cap.get(cv2.CAP_PROP_FRAME_COUNT):
-                # If the number of captured frames is equal to the total number of frames,
-                # we stop
-                print("\nFinal: " + str(MeasurerInstance.current_best["curvature"]) + "; " + str(MeasurerInstance.current_best["length"]) + "; " + str(MeasurerInstance.current_best["frame"]))
-                break
-            
-        return images
+        return chosen_image
+    
+    def AssessFilament(self, filament):
         
-    def AssessFilament(fil, frame, dst, gradient):
-        filament = None
-        try:
-            if len(fil.lengths()) > 1:
-                lengths = [q.value for q in fil.lengths()]
-                index = lengths.index(max(fil.lengths()).value)
-                filament = fil.filaments[index]
-            else:
-                filament = fil.filaments[0]
-        except:
-            return (False, "could not grab filament")
-            
-        long_path = fil.skeleton_longpath
         fil_length = filament.length(u.pix).value
+        added_dist = 0
         
         filament.rht_analysis()
         fil_curvature = filament.curvature.value
-        fil_orientation = filament.orientation.value #* 180 / math.pi
+        fil_orientation = filament.orientation.value
         
-        # run the intersection exercise for each end point
         longpath_pixel_coords = filament.longpath_pixel_coords
         end_pts = [(longpath_pixel_coords[0][0], longpath_pixel_coords[1][0]),
                    (longpath_pixel_coords[0][-1], longpath_pixel_coords[1][-1])]
         
-        dimensions = np.shape(dst)
+        dimensions = np.shape(self.current_images["processed"])
+        slope = math.cos(fil_orientation) / math.sin(fil_orientation)
         
-        # Convert orientation to slope
-        slope = None
-        if fil_orientation > 0:
-            slope = math.pi / 2 - fil_orientation
-        elif fil_orientation < 0:
-            slope = - math.pi / 2 - fil_orientation
-                
+        # run the intersection exercise for each end point
         for point in end_pts:
-            # Create line mask and get intersecting points
+            # Get the line equation passing through the end point
             line_mask = np.zeros(dimensions)
             b = dimensions[0] - point[0] - slope * (point[1])
             
@@ -197,17 +142,18 @@ class MeasurerInstance():
                 if y < dimensions[0] - 1 and y >= 0:
                     line_mask[dimensions[0] - 1 - y, x] = 1
                     
-            combined_array = line_mask + gradient
+            # Find where the fish boundary and the line intersect
+            # There will be multiple points since the contour is not one-pixel thick
+            combined_array = line_mask + self.current_images["contour"]
             pts_of_interest = np.where(combined_array > 1)
             
-            # Get minimum distance from both ends to contour and add to the filament length
+            # Get minimum distance end point to contour and add to the filament length
             minimum_distance = None
             min_point_set = None
             for i in range(len(pts_of_interest[0])):
                 coord = np.array([pts_of_interest[0][i], pts_of_interest[1][i]])
                 dist = np.linalg.norm(coord - np.array(point))
-                # print("int: " + str(coord), "endpt: " + str(point), "dist: " + str(dist))
-                if dist < 0: # endpoint on edge of a multi-pixel contour
+                if dist < 0: # endpoint on edge of a multi-pixel thick contour
                     minimum_distance = dist
                     min_point_set = coord
                     break
@@ -220,54 +166,42 @@ class MeasurerInstance():
                         min_point_set = coord
                         
             fil_length += minimum_distance
-                
-            # Fill in the line mask array with extensions
-            for x in range(point[1], min_point_set[1]):
+            added_dist += minimum_distance
+            
+            # Fill in the skeletonized long path array with these extensions
+            for x in range(point[1], min_point_set[1], 1 if point[1] <= min_point_set[1] else -1):
                 y = round(slope * x + b)
                 if y < dimensions[0] - 1 and y >= 0:
-                    long_path[dimensions[0] - 1 - y, x] = 1
+                    self.current_images["long_path"][dimensions[0] - 1 - y][x] = 1
                 
-        # endptImage = cv2.addWeighted(blendedImage * 255,0.5,gradient*255,0.5,0)
-        # temp = cv2.resize(temp, None, fy=0.4, fx=0.4)
-        # cv2.imshow('thing', temp) 
-        # cv2.waitKey(0)
+        print(slope, fil_curvature, "fil length: " + str(fil_length), "added length: " + str(added_dist))
             
-        print(slope, fil_curvature, "fil length: " + str(fil_length))
-            
-            
-        # plt.imshow(filament.skeleton(pad_size=10,out_type='longpath'))
-            
-        if not any(MeasurerInstance.current_best):
-            if fil_curvature < MeasurerInstance.max_curvature:
-                MeasurerInstance.current_best = {"curvature": fil_curvature, "length": fil_length, "frame": frame, "image": None}
-                image = MeasurerInstance.ShowImage(dst, (long_path * 255).astype('uint8'), resize=0.4, name="binarized") 
-                return (True, "candidate accepted")
-            else:
-                return (False, "candidate too curved")
-
-        elif fil_length <= MeasurerInstance.current_best["length"]:
+        # Compare to current best filament
+        if not any(self.current_best):
+            return self.CompareFilamentProperties(fil_curvature, fil_length) # will create the dictionary
+        elif fil_length <= self.current_best["length"]:
             return (False, "filament too short")
         else:
-            if fil_curvature < MeasurerInstance.max_curvature:
-                print("candidate accepted")
-                image = MeasurerInstance.ShowImage(dst, (long_path * 255).astype('uint8'), resize=0.4, name="binarized") 
-                
-                MeasurerInstance.current_best["curvature"] = fil_curvature
-                MeasurerInstance.current_best["length"] = fil_length
-                MeasurerInstance.current_best["image"] = image
-                MeasurerInstance.current_best["frame"] = frame
-                return (True, "candidate accepted")
-            else:
-                return (False, "candidate too curved")
+            return self.CompareFilamentProperties(fil_curvature, fil_length)
 
-    def ShowImage(image1, image2, resize=0.5, name='Image'):
+
+    def ShowImage(image1, image2, resize=0.7, name='Image', pausekey=False):
         image = cv2.addWeighted(image1,0.5,image2,0.5,0)
         temp = cv2.resize(image, None, fy=resize, fx=resize)
         cv2.imshow(name, temp) 
+        if pausekey:
+            cv2.waitKey(0)
+            
         return image
     
-
-measurer = MeasurerInstance()
+    def CompareFilamentProperties(self, fil_curvature, fil_length):
+        if fil_curvature < self.max_curvature:
+            image = MeasurerInstance.ShowImage(self.current_images["processed"], (self.current_images["long_path"] * 255).astype('uint8'), name="binarized") 
+            self.current_images["processed"] = image
+            self.current_best = {"curvature": fil_curvature, "length": fil_length, "images": self.current_images}
+            return (True, "candidate accepted")
+        else:
+            return (False, "candidate too curved")
         
         
         

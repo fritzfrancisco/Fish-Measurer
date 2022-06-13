@@ -3,11 +3,22 @@ from pypylon import pylon
 from datetime import datetime, time
 from PIL import Image, ImageTk
 import cv2
-import sys
+import time
 
 class Cameras():
     
     def __init__(self, **kwargs):
+        # converter for opencv bgr format
+        Cameras.converter = pylon.ImageFormatConverter()
+        Cameras.converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+        Cameras.converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+        
+        # Status variables
+        Cameras.current_frame = None
+        Cameras.new_frame = False
+        Cameras.framerate = 30
+        Cameras.active_measurer = None
+        
         # Get the available cameras
         tlFactory = pylon.TlFactory.GetInstance()
         devices = tlFactory.EnumerateDevices()
@@ -21,74 +32,75 @@ class Cameras():
                 
             Cameras.currentCam = Cameras.cameras[0]
             Cameras.connected = True
-            Cameras.ChangeCamera(Cameras.currentCam)
-        
-        # converter for opencv bgr format
-        Cameras.converter = pylon.ImageFormatConverter()
-        Cameras.converter.OutputPixelFormat = pylon.PixelType_BGR8packed
-        Cameras.converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
-        
-        Cameras.pulling = False
+            Cameras.StartGrabbing()
     
-    def ApplySettings(**kwargs):
+    def ApplySettings(measurer, **kwargs):
         Cameras.currentCam.ExposureTime.SetValue(float(kwargs["exposure"]))
         Cameras.currentCam.GainAuto.SetValue(kwargs["gain"])
         Cameras.currentCam.AcquisitionFrameRateEnable.SetValue(True)
         Cameras.currentCam.AcquisitionFrameRate.SetValue(float(kwargs["framerate"]))
-        Cameras.images_to_grab = kwargs["framerate"] * kwargs["duration"]
+        Cameras.framerate = float(kwargs["framerate"])
+        
+    def ConnectMeasurer(measurer):
+        Cameras.active_measurer = measurer
+    
+    def DisconnectMeasurer():
+        Cameras.active_measurer = None
         
     def StopGrabbing():
-        if Cameras.currentCam.IsGrabbing():
-            Cameras.currentCam.StopGrabbing()
-            Cameras.currentCam.Close()
-    
-    def ChangeCamera(newCamera):
-        Cameras.StopGrabbing()
+        try:
+            if Cameras.currentCam.IsGrabbing():
+                Cameras.currentCam.StopGrabbing()
+                Cameras.currentCam.Close()
                 
-        Cameras.currentCam = newCamera
+            return True
+        except:
+            return False
+            
+    def StartGrabbing():
         Cameras.currentCam.Open()
         Cameras.currentCam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
-    
-    def GetImages():
-        Cameras.pulling = True
-        Cameras.StopGrabbing()
-        
-        Cameras.currentCam.Open()
-        Cameras.currentCam.StartGrabbingMax(int(Cameras.images_to_grab), pylon.GrabStrategy_OneByOne)
-        Cameras.image_list = []
-        
-        while Cameras.currentCam.IsGrabbing():
-            # Wait for an image and then retrieve it. A timeout of 5000 ms is used.
-            grabResult = Cameras.currentCam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-
-            # Image grabbed successfully?
-            if grabResult.GrabSucceeded():
-                # Access the image data.
-                # print("SizeX: ", grabResult.Width)
-                # print("SizeY: ", grabResult.Height)
-                img = grabResult.Array
-                Cameras.image_list.append(img)
-                # print("Gray value of first pixel: ", img[0, 0])
-            else:
-                print("Error: ", grabResult.ErrorCode, grabResult.ErrorDescription)
-                
-            grabResult.Release()
-            
-        Cameras.pulling = False
-        Cameras.ChangeCamera(Cameras.currentCam)
-        return Cameras.image_list
-
-    def UpdateCamera(fishID=None, addText=None):
-        # Wait for an image and then retrieve it. A timeout of 5000 ms is used.
         grabResult = Cameras.currentCam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-
+        
         # Image grabbed successfully?
         if grabResult.GrabSucceeded():
             image = Cameras.converter.Convert(grabResult)
             img = image.GetArray()
-            img = cv2.resize(img, None, fy=.39, fx=.39)
+            frame=cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
             
-            # Apply text to image
+            Cameras.SetNewFrame(frame)
+            
+    def ChangeCamera(newCamera):
+        state = Cameras.StopGrabbing()
+        if state:
+            Cameras.currentCam = newCamera
+            Cameras.StartGrabbing()
+        else:
+            print("ERROR")
+            Cameras.connected = False # will automatically shut down app in constructor
+    
+    def SetNewFrame(frame):
+        if Cameras.active_measurer.background is not None:
+            Cameras.current_frame = Cameras.active_measurer.ProcessImage(frame)
+        else:
+            Cameras.current_frame = frame
+        
+        Cameras.new_frame = True
+        
+    def GetFixedNumFrames(images_to_grab):
+        image_list = []
+        
+        while len(image_list) < images_to_grab:
+            if Cameras.new_frame:
+                Cameras.new_frame = False
+                image_list.append(Cameras.current_frame)
+            time.sleep(1/Cameras.framerate)
+        
+        return image_list
+
+    def UpdateCamera(fishID=None, addText=None):
+        if Cameras.current_frame is not None:
+            img = cv2.resize(Cameras.current_frame, None, fy=.39, fx=.39)
             img = cv2.putText(img, datetime.now().strftime("%d.%m.%Y %H:%M:%S"), (15, 25), cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), lineType=cv2.LINE_AA)
             
             if fishID != None and fishID != '':
@@ -100,17 +112,9 @@ class Cameras():
                 for i, line in enumerate(text.split('\n')):
                     y = y0 + i*dy
                     cv2.putText(img, line, (15, y), cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), lineType=cv2.LINE_AA)
-        
+            
             # Update the image to tk...
-            frame=cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
-            img_update = ImageTk.PhotoImage(Image.fromarray(frame))
-            
-            k = cv2.waitKey(1)
-            if k == 27:
-                Cameras.currentCam.StopGrabbing()
-                Cameras.currentCam.Close()
-                cv2.destroyAllWindows()
-            
+            img_update = ImageTk.PhotoImage(Image.fromarray(img))
             return img_update
         else:
             return None

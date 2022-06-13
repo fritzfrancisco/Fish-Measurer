@@ -3,7 +3,6 @@ from tkinter import *
 from tkinter import filedialog
 import os
 from datetime import datetime, time
-import json
 from DigitEntry import DigitEntry
 from MeasurerInstance import MeasurerInstance
 from Cameras import Cameras
@@ -22,7 +21,8 @@ class ConstructApp():
         rootWindow.columnconfigure(1, weight=1)
         
         if not Cameras.connected:
-            tk.messagebox.showerror("Camera Connection Error", "The app cannot find a camera connected to this device. Please verify the connection and try again.")
+            tk.messagebox.showerror("Camera Connection Error", "The app cannot find a camera connected to this device or \
+                could not connect to the selected camera. Please verify the device connection and try again.")
             sys.exit()
             
         settingsFrame = tk.Frame(relief='flat')
@@ -37,26 +37,27 @@ class ConstructApp():
         paneeli_image.pack(fill=tk.BOTH, expand=True)
         
         def UpdateFeed():
-            # print(datetime.now().strftime("%d.%m.%Y %H:%M:%S"))
-            if Cameras.pulling:
-                newImage = MeasurerInstance.binarized_image
-                # print("pulling")
-            else:
-                newImage = Cameras.UpdateCamera(fishID=fishIDEntry.get(), addText=additionalText.get("1.0",'end-1c'))
-                # print("not pulling")
+            fishID = ConstructApp.fishIDEntry.get()
+            addText = ConstructApp.additionalText.get("1.0",'end-1c')
+            
+            # Update the measurer
+            MeasurerInstance.fishID = fishID
+            MeasurerInstance.addText = addText
+            
+            # Fish for the new image
+            newImage = Cameras.UpdateCamera(fishID=fishID, addText=addText)
             if newImage != None:
-                # print("an image")
                 paneeli_image.configure(image=newImage)
                 paneeli_image.image=newImage
                 paneeli_image.update()
-                paneeli_image.after(15, UpdateFeed)
+                paneeli_image.after(1/Cameras.framerate*1000, UpdateFeed)
             else:
-                if not Cameras.pulling:
+                if not Cameras.connected:
                     tk.messagebox.showerror("Camera Connection Error", "The app cannot find a camera connected to this device. Please verify the connection and try again.")
                     sys.exit()
                 else:
                     # print("image None")
-                    paneeli_image.after(15, UpdateFeed)
+                    paneeli_image.after(1/Cameras.framerate*1000, UpdateFeed)
                 
         ## -- CAMERA SETTINGS --------------------------------------------------------------------------------
         cameraFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=2, pady=10, bg="grey80")
@@ -95,77 +96,37 @@ class ConstructApp():
         cameraSettingsFrame = tk.Frame(master=cameraFrame, relief='flat', borderwidth=2, padx=5, pady=5, bg="grey60")
         cameraSettingsFrame.pack(fill=tk.X)
 
-        def UploadAction():
-            filename = filedialog.askopenfilename()
-            
-            if filename:
-                # Opening JSON file
-                with open(filename) as json_file:
-                    data = json.load(json_file)
-                    
-                    uploadFailed = []
-                    if "exposure" in data:
-                        exposureSetting.ChangeValue(data["exposure"]) 
-                    else:
-                        uploadFailed.append("exposure")
-                        
-                    if "gain" in data:
-                        if data["gain"] in GAINOPTIONS:
-                            gainVariable.set(GAINOPTIONS[GAINOPTIONS.index(data["gain"])])
-                        else:
-                            uploadFailed.append("gain")
-                    else:
-                        uploadFailed.append("gain")
-                        
-                    if "duration" in data:
-                        durationSetting.ChangeValue(data["duration"]) 
-                    else:
-                        uploadFailed.append("duration")
-                        
-                    if "framerate" in data:
-                        frameRateSetting.ChangeValue(data["framerate"]) 
-                    else:
-                        uploadFailed.append("framerate")
-                        
-                    if "threshold" in data:
-                        thresholdSetting.ChangeValue(data["threshold"]) 
-                    else:
-                        uploadFailed.append("threshold")
-                    
-                    if uploadFailed:
-                        tk.messagebox.showerror("Config File Errors", "The following parameters were not updated due to parsing errors:\n\n" + str(uploadFailed))
-
-        button = tk.Button(cameraSettingsFrame, text='Upload .config file', command=UploadAction)
-        button.pack(fill=tk.X)
-
         manualFillPrompt = tk.Label(text="Or enter settings manually:", master=cameraSettingsFrame, bg="grey60", pady=10)
         manualFillPrompt.config(font=("Courier", 12))
         manualFillPrompt.pack(fill=tk.X)
 
-        inputsFrame = tk.Frame(master=cameraSettingsFrame, relief='flat', borderwidth=2)
-        inputsFrame.pack(fill=tk.X)
-        inputsFrame.columnconfigure(0)
-        inputsFrame.columnconfigure(1, weight=1)
+        self.inputsFrame = tk.Frame(master=cameraSettingsFrame, relief='flat', borderwidth=2)
+        self.inputsFrame.pack(fill=tk.X)
+        self.inputsFrame.columnconfigure(0)
+        self.inputsFrame.columnconfigure(1, weight=1)
 
         # Settings inputs
-        exposureSetting = DigitEntry("Exposure (ms): ", 10000, 0, inputsFrame)
+        ConstructApp.exposureSetting = DigitEntry("Exposure (ms): ", 10000, 0, self.inputsFrame, trace="exposure")
 
-        gainSetting = tk.Label(text="Gain Setting: ", master=inputsFrame)
+        gainSetting = tk.Label(text="Gain Setting: ", master=self.inputsFrame)
         GAINOPTIONS = [
         "Once",
         "Continuous",
         "Off"
         ]
-        gainVariable = StringVar()
-        gainVariable.set(GAINOPTIONS[0]) # default value
-        w = OptionMenu(inputsFrame, gainVariable, *GAINOPTIONS)
+        ConstructApp.gainVariable = StringVar()
+        ConstructApp.gainVariable.set(GAINOPTIONS[0]) # default value
+        ConstructApp.gainVariable.trace('w', SendGain)
+        w = OptionMenu(self.inputsFrame, ConstructApp.gainVariable, *GAINOPTIONS)
         w["highlightthickness"] = 0
         w.grid(row = 1, column = 1, sticky='ew', padx=5)
         gainSetting.grid(row = 1, column = 0, sticky='w', padx=5)
+        
+        def SendGain():
+            Cameras.currentCam.GainAuto.SetValue(float(ConstructApp.gainVariable.get()))
 
-        durationSetting = DigitEntry("Duration (s): ", 5, 2, inputsFrame)
-        frameRateSetting = DigitEntry("Framerate (fps): ", 30, 3, inputsFrame)
-        thresholdSetting = DigitEntry("Threshold [0, 255]: ", 100, 4, inputsFrame, lower=0, upper=255)
+        ConstructApp.durationSetting = DigitEntry("Duration (s): ", 5, 2, self.inputsFrame) # don't need
+        ConstructApp.frameRateSetting = DigitEntry("Framerate (fps): ", 30, 3, self.inputsFrame, trace="framerate")
 
         ## -- OUTPUT SETTINGS -----------------------------------------------------------------------------------------------
         outputFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=2, pady=10, bg="grey80")
@@ -202,9 +163,9 @@ class ConstructApp():
         button = tk.Button(browseFrame, text='Browse...', command=BrowseButton)
         button.grid(row=0, column=0, sticky="nsew")
 
-        folder_path = StringVar()
-        folder_path.set(os.getcwd())
-        selectedFolder = Label(master=browseFrame, textvariable=folder_path, width=31, anchor='e')
+        ConstructApp.folder_path = StringVar()
+        ConstructApp.folder_path.set(os.getcwd())
+        selectedFolder = Label(master=browseFrame, textvariable=ConstructApp.folder_path, width=31, anchor='e')
         selectedFolder.grid(row=0, column=1, sticky="nsew")
 
         # File format selector
@@ -222,9 +183,9 @@ class ConstructApp():
         ".png",
         ".tiff"
         ]
-        outputFormatVariable = StringVar()
-        outputFormatVariable.set(OPTIONS[0]) # default value
-        w = OptionMenu(formatFrame, outputFormatVariable, *OPTIONS)
+        ConstructApp.outputFormatVariable = StringVar()
+        ConstructApp.outputFormatVariable.set(OPTIONS[0]) # default value
+        w = OptionMenu(formatFrame, ConstructApp.outputFormatVariable, *OPTIONS)
         w["highlightthickness"] = 0
         w.grid(row = 0, column = 1, sticky='ew', padx=5, pady=5)
 
@@ -239,9 +200,9 @@ class ConstructApp():
         fishIDFrame.pack(fill=tk.X, pady=3)
 
         fishID = tk.Label(text="Fish ID: ", master=fishIDFrame, pady=3)
-        fishIDEntry = tk.Entry(fishIDFrame, justify='left') 
+        ConstructApp.fishIDEntry = tk.Entry(fishIDFrame, justify='left') 
         fishID.grid(row = 0, column = 0, sticky='w', padx=5)
-        fishIDEntry.grid(row = 0, column = 1, sticky='ew', padx=5)
+        ConstructApp.fishIDEntry.grid(row = 0, column = 1, sticky='ew', padx=5)
 
         ## Freetext
         freetextFrame = tk.Frame(master=watermarkFrame, relief='flat', borderwidth=2, padx=5)
@@ -251,37 +212,80 @@ class ConstructApp():
         freetextPrompt.config(font=("Courier", 10))
         freetextPrompt.pack(fill=tk.X)
 
-        additionalText = tk.Text(freetextFrame, height=5, width=5)
-        additionalText.pack(fill=tk.X, pady=5)
+        ConstructApp.additionalText = tk.Text(freetextFrame, height=5, width=5)
+        ConstructApp.additionalText.pack(fill=tk.X, pady=5)
+        
+        ## -- BG BUTTON -----------------------------------------------------------------------------------
+        backgroundFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=10, pady=10, bg="grey80")
+        backgroundFrame.pack(fill=tk.BOTH)
+        
+        self.backgroundButton = tk.Button(backgroundFrame, text='TRAIN', command=self.BackgroundButton, bg="DarkSeaGreen", font=("Courier", 24), fg="white")
+        self.backgroundButton.pack(fill=tk.BOTH)
 
         ## -- START BUTTON -----------------------------------------------------------------------------------
+        ConstructApp.thresholdSetting = DigitEntry("Threshold [0, 255]: ", 100, 4, settingsFrame, lower=0, upper=255, trace="threshold")
+        
         startFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=10, pady=10, bg="grey80")
         startFrame.pack(fill=tk.BOTH)
-        
-        # def tester(dict):
-        #     measurer = MeasurerInstance(dict)
 
-        def StartButton(event=None):
-            # Assemble measurer instance dictionary
-            instanceDict = {}
-            instanceDict["settings"] = {"exposure": float(exposureSetting.GetValue()), "gain": gainVariable.get(),
-                                        "duration": float(durationSetting.GetValue()), "framerate": float(frameRateSetting.GetValue()), 
-                                        "threshold": float(thresholdSetting.GetValue())}
-            instanceDict["watermark"] = "{0}\n{1}\n{2}".format(datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
-                                                            fishIDEntry.get(), additionalText.get("1.0",'end-1c'))
-            instanceDict["folder"] = folder_path.get()
-            instanceDict["format"] = outputFormatVariable.get()
-            
-            measurer = MeasurerInstance(instanceDict)
-            
-            # Declare class and get cracking
-            # x = threading.Thread(target=tester, args=(instanceDict,), daemon=True)
-            # x.start()
-            
-            ## cannot communicate variables across the threads, need to find some other means of communication
-            
-        startButton = tk.Button(startFrame, text='START', command=StartButton, bg="red", font=("Courier", 24), fg="white")
-        startButton.pack(fill=tk.BOTH)
+        self.startButton = tk.Button(startFrame, text='START', command=self.StartButton, bg="red", font=("Courier", 24), fg="white", state="disabled")
+        self.startButton.pack(fill=tk.BOTH)
 
         paneeli_image.after(15, UpdateFeed)
         rootWindow.mainloop()
+        
+    def ButtonTextCountDown(button, time):
+        for i in range(time, 0, -1):
+            button["text"] = str(i)
+            time.sleep(1)
+            
+    def BackgroundButton(self):
+        if self.backgroundButton["text"] == "TRAIN":
+            # Locking
+            self.backgroundButton["state"] = "disabled"
+            for child in self.inputsFrame.winfo_children():
+                child.configure(state='disable')
+            
+            measurer = MeasurerInstance(ConstructApp.folder_path.get(), ConstructApp.outputFormatVariable.get())
+            
+            # Thread the Tkinter button countdown
+            x = threading.Thread(target=ConstructApp.ButtonTextCountDown, args=(self.backgroundButton, 10,), daemon=True)
+            x.start()
+            # if doesn't work, can place a timer in the TrainBackground method and put the for loop here instead of in the measurer
+            
+            # Train our background for later subtraction
+            measurer.TrainBackground()
+            
+            # Reconfigure the buttons
+            self.backgroundButton["text"] = "RESTART"
+            self.backgroundButton.configure(bg = "red")
+            self.backgroundButton["state"] == "normal"
+            self.startButton.configure(bg = "DarkSeaGreen")
+            self.startButton["state"] == "normal"
+            
+            ## trigger threshold camera view
+            
+        elif self.backgroundButton["text"] == "RESTART":
+            # Reconfigure buttons and delete the previous instance
+            self.backgroundButton["text"] = "TRAIN"
+            self.backgroundButton.configure(bg = "DarkSeaGreen")
+            self.startButton.configure(bg = "red")
+            self.startButton["state"] == "disabled"
+            
+            # Unlock settings
+            for child in self.inputsFrame.winfo_children():
+                child.configure(state='normal')
+            
+            Cameras.DisconnectMeasurer()
+            measurer = None
+            
+    def StartButton(self):
+        self.backgroundButton["state"] == "disabled"
+        self.startButton["state"] == "disabled"
+        ConstructApp.thresholdSetting.Activate(False)
+        
+        Cameras.active_measurer.Skeletonize()
+        
+        self.startButton["state"] == "normal"
+        self.backgroundButton["state"] == "normal"
+        ConstructApp.thresholdSetting.Activate(True)
