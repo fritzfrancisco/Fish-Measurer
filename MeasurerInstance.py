@@ -8,12 +8,12 @@ import os
 from datetime import datetime
 
 class MeasurerInstance():
-    
-    def __init__(self, outputFolder, format, min_skel_size=0.01, max_curvature=26.35):
+    def __init__(self, outputFolder, format, min_skel_size=0.01, max_curvature=50):
+        ## 26.35
         self.outputFolder = outputFolder
         self.format = format
-        MeasurerInstance.background = MeasurerInstance.threshold = MeasurerInstance.fishID = MeasurerInstance.addText = None
-        
+        self.background = MeasurerInstance.threshold = MeasurerInstance.fishID = MeasurerInstance.addText = None
+
         self.max_curvature = math.pi / 180 * max_curvature
         self.min_skel_size = MeasurerInstance.ConvertPixelsToLength(min_skel_size)
         
@@ -24,34 +24,35 @@ class MeasurerInstance():
 
     def ProcessImage(self, frame):
         self.frame = frame
-        fgmask = self.fgbg.apply(frame)
-        im_bw = cv2.threshold(fgmask, MeasurerInstance.threshold, 255, cv2.THRESH_BINARY)[1]
+        fgmask = self.fgbg.apply(frame, learningRate=0)
+        self.im_bw = cv2.threshold(fgmask, MeasurerInstance.threshold, 255, cv2.THRESH_BINARY)[1]
         
-        # Apply morphological operations (image processing)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        
-        closing = cv2.morphologyEx(im_bw, cv2.MORPH_CLOSE, kernel, iterations=3)
-        self.opening = cv2.morphologyEx(closing, cv2.MORPH_CLOSE, kernel)
-        self.gradient = cv2.morphologyEx(self.opening, cv2.MORPH_GRADIENT, kernel) 
-        self.processed_image = cv2.addWeighted(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY),0.7,self.opening,0.3,0)
-        self.processed_image = cv2.addWeighted(self.gradient,0.2,self.processed_image,0.8,0)
-        
-        return self.processed_image
+        return self.im_bw
         
     def TrainBackground(self):
-        background_images = Cameras.GetFixedNumFrames(Cameras.framerate* 10)
+        background_images = Cameras.GetFixedNumFrames(Cameras.framerate * 3)
         self.fgbg = cv2.createBackgroundSubtractorMOG2()
         for image in background_images:
             fgmask = self.fgbg.apply(image)
             
         self.background = fgmask
-                
-    def Skeletonize(self):
+    
+    def SkeletonizeFrames(self, frames):
         self.current_best = {}
         self.current_images = {}
         
-        for frame_count in range(50):
-            skeleton_mask = cv2.ximgproc.thinning(self.opening)
+        for i, frame in enumerate(frames):            
+            # Apply morphological operations (image processing)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            closing = cv2.morphologyEx(frame, cv2.MORPH_CLOSE, kernel, iterations=3)
+            opening = cv2.morphologyEx(closing, cv2.MORPH_CLOSE, kernel)
+            
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            self.gradient = cv2.morphologyEx(opening, cv2.MORPH_GRADIENT, kernel) 
+            self.processed_image = cv2.addWeighted(cv2.cvtColor(self.frame, cv2.COLOR_BGR2GRAY),0.7,opening,0.3,0)
+            self.processed_image = cv2.addWeighted(self.gradient,0.2,self.processed_image,0.8,0)
+            
+            skeleton_mask = cv2.ximgproc.thinning(opening)
             fil = FilFinder2D(skeleton_mask, distance=1500*u.pix, mask=skeleton_mask)
             fil.create_mask(verbose=False, use_existing_mask=True)
             fil.medskel(verbose=False)
@@ -73,32 +74,35 @@ class MeasurerInstance():
                 continue
                 
             long_path = fil.skeleton_longpath
-            self.current_images = {"processed": self.processed_image, "contour": self.gradient, "threshed": self.opening, "raw": self.frame, "long_path": long_path}
+            self.current_images = {"processed": self.processed_image, "contour": self.gradient, "threshed": opening, "raw": self.frame, "long_path": long_path}
             
             (accepted, statement) = self.AssessFilament(filament)
-            print(statement)
+            print("frame: " + str(i) + "; " + statement)
             if not accepted:
                 continue
             else:
-                self.current_best["frame"] = frame_count
+                self.current_best["frame"] = i
 
-        print("\nFinal: " + str(self.current_best["curvature"]) + "; " + str(self.current_best["length"]) + "; " + str(self.current_best["frame"]))
-        
-        chosen_image = MeasurerInstance.WatermarkImage(self.current_best)
-        
-        # Save it and open it
-        cv2.imwrite(os.path.join(
-            os.path.join(self.settingsDict["folder"], str(datetime.now().strftime("%d.%m.%Y %H:%M:%S"))),str(self.settingsDict["format"])), chosen_image)
-
-        cv2.imshow("Final Image", chosen_image) 
-        cv2.waitKey(0)
+        if not self.current_best:
+            print("dict empty")
+        else:
+            print("\nFinal: " + str(self.current_best["curvature"]) + "; " + str(self.current_best["length"]) + "; " + str(self.current_best["frame"]))
+            
+            chosen_image = MeasurerInstance.WatermarkImage(self.current_best)
+            
+            # Save it and open it
+            state = cv2.imwrite(os.path.join(self.outputFolder, str(datetime.now().strftime("%d-%m-%Y_%H-%M-%S")) + str(self.format)), chosen_image)
+            print(state)
+            
+            cv2.imshow("Final Image", chosen_image) 
+            cv2.waitKey(0)
     
     def WatermarkImage(current_best):
         # Watermark the results
         chosen_image = cv2.putText(current_best["images"]["processed"], 
-                                   "curvature (deg): " + str(current_best["curvature"] * 180 / math.pi + "; length (m): " + \
-                                       str(MeasurerInstance.ConvertPixelsToLength(current_best["length"]))),
-                                   current_best["curvature"]["processed"].shape[0]-20, cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), lineType=cv2.LINE_AA)
+                                   "curvature (deg): " + str(current_best["curvature"] * 180 / math.pi) + "; length (m): " + \
+                                       str(MeasurerInstance.ConvertPixelsToLength(current_best["length"])),
+                                   (15, current_best["images"]["processed"].shape[0]-20), cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), lineType=cv2.LINE_AA)
         
         # Add metadata
         chosen_image = cv2.putText(chosen_image, datetime.now().strftime("%d.%m.%Y %H:%M:%S"), (15, 25), cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), lineType=cv2.LINE_AA)

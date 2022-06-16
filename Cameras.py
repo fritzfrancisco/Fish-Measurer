@@ -4,8 +4,11 @@ from datetime import datetime, time
 from PIL import Image, ImageTk
 import cv2
 import time
+import threading
 
 class Cameras():
+    currentCam = None
+    global current_frame
     
     def __init__(self, **kwargs):
         # converter for opencv bgr format
@@ -14,7 +17,8 @@ class Cameras():
         Cameras.converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
         
         # Status variables
-        Cameras.current_frame = None
+        global current_frame
+        current_frame = None
         Cameras.new_frame = False
         Cameras.framerate = 30
         Cameras.active_measurer = None
@@ -60,16 +64,22 @@ class Cameras():
     def StartGrabbing():
         Cameras.currentCam.Open()
         Cameras.currentCam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
-        grabResult = Cameras.currentCam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
         
-        # Image grabbed successfully?
-        if grabResult.GrabSucceeded():
-            image = Cameras.converter.Convert(grabResult)
-            img = image.GetArray()
-            frame=cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
+        x = threading.Thread(target=Cameras.GrabLoop, daemon=True)
+        x.start()
+    
+    def GrabLoop():
+        while Cameras.currentCam.IsGrabbing():
+            grabResult = Cameras.currentCam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
             
-            Cameras.SetNewFrame(frame)
-            
+            # Image grabbed successfully?
+            if grabResult.GrabSucceeded():
+                image = Cameras.converter.Convert(grabResult)
+                img = image.GetArray()
+                frame=cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
+                
+                Cameras.SetNewFrame(frame)
+        
     def ChangeCamera(newCamera):
         state = Cameras.StopGrabbing()
         if state:
@@ -79,28 +89,34 @@ class Cameras():
             print("ERROR")
             Cameras.connected = False # will automatically shut down app in constructor
     
+    def TriggerSkeletonize():
+        global current_frame
+        Cameras.active_measurer.SkeletonizeFrames(Cameras.GetFixedNumFrames(2))
+    
     def SetNewFrame(frame):
-        if Cameras.active_measurer.background is not None:
-            Cameras.current_frame = Cameras.active_measurer.ProcessImage(frame)
+        global current_frame
+        if Cameras.active_measurer is not None and Cameras.active_measurer.background is not None:
+            current_frame = Cameras.active_measurer.ProcessImage(frame)
         else:
-            Cameras.current_frame = frame
+            current_frame = frame
         
         Cameras.new_frame = True
-        
+            
     def GetFixedNumFrames(images_to_grab):
         image_list = []
+        global current_frame
         
         while len(image_list) < images_to_grab:
             if Cameras.new_frame:
                 Cameras.new_frame = False
-                image_list.append(Cameras.current_frame)
+                image_list.append(current_frame)
             time.sleep(1/Cameras.framerate)
         
         return image_list
 
     def UpdateCamera(fishID=None, addText=None):
-        if Cameras.current_frame is not None:
-            img = cv2.resize(Cameras.current_frame, None, fy=.39, fx=.39)
+        if current_frame is not None:
+            img = cv2.resize(current_frame, None, fy=.39, fx=.39)
             img = cv2.putText(img, datetime.now().strftime("%d.%m.%Y %H:%M:%S"), (15, 25), cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), lineType=cv2.LINE_AA)
             
             if fishID != None and fishID != '':

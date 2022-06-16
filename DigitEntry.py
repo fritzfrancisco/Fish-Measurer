@@ -1,25 +1,32 @@
 import tkinter as tk
 from tkinter import *
-import Cameras
-import MeasurerInstance
+from MeasurerInstance import MeasurerInstance
+from Cameras import Cameras
 
 class DigitEntry():
     
     '''A Entry widget that only accepts digits'''
-    def __init__(self, labelText, defaultValue, row, master=None, **kwargs):
+    def __init__(self, labelText, defaultValue, row, master, **kwargs):
         
         self.lower = kwargs["lower"] if "lower" in kwargs else None
         self.upper = kwargs["upper"] if "upper" in kwargs else None
         self.trace = kwargs["trace"] if "trace" in kwargs else None
+        self.master = master
         
-        self.label = tk.Label(text=labelText, master=master, pady=3)
+        if "pack" in kwargs:
+            # frame = tk.Frame(master=self.master, relief='flat', borderwidth=2, pady=5)
+            self.master.pack(fill=tk.X)
+            self.master.columnconfigure(0)
+            self.master.columnconfigure(1, weight=1)
         
-        self.var = tk.StringVar(master)
+        self.label = tk.Label(text=labelText, master=self.master, pady=3)
+        
+        self.var = tk.StringVar(self.master)
         self.var.trace('w', self.validate)
         self.get, self.set = self.var.get, self.var.set
         self.set(defaultValue)
         
-        self.entry = tk.Entry(master, textvariable=self.var, justify='center') 
+        self.entry = tk.Entry(self.master, textvariable=self.var, justify='center') 
         self.label.grid(row = row, column = 0, sticky='w', padx=5)
         self.entry.grid(row = row, column = 1, sticky='ew', padx=5)
         
@@ -27,6 +34,8 @@ class DigitEntry():
         value = self.get()
         if not value.isdigit():
             self.set(''.join(x for x in value if x.isdigit()))
+            value = self.get()
+        
         if self.lower:
             if float(value) < self.lower:
                 self.set(self.lower)
@@ -50,7 +59,7 @@ class DigitEntry():
     
     def Activate(self, status):
         if status:
-            self.config(state="normal")
+            self.entry["state"] == "disabled"
         else:
-            self.config(state="disabled")
+            self.entry["state"] == "normal"
             

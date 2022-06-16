@@ -6,13 +6,13 @@ from datetime import datetime, time
 from DigitEntry import DigitEntry
 from MeasurerInstance import MeasurerInstance
 from Cameras import Cameras
+import math
+import time
 import sys
 import threading
 
-
 class ConstructApp():
     def __init__(self, **kwargs):
-             
         # Create the app
         rootWindow = tk.Tk()
         rootWindow.geometry("1422x800")
@@ -50,14 +50,14 @@ class ConstructApp():
                 paneeli_image.configure(image=newImage)
                 paneeli_image.image=newImage
                 paneeli_image.update()
-                paneeli_image.after(1/Cameras.framerate*1000, UpdateFeed)
+                paneeli_image.after(math.ceil(1/Cameras.framerate*1000), UpdateFeed)
             else:
                 if not Cameras.connected:
                     tk.messagebox.showerror("Camera Connection Error", "The app cannot find a camera connected to this device. Please verify the connection and try again.")
                     sys.exit()
                 else:
                     # print("image None")
-                    paneeli_image.after(1/Cameras.framerate*1000, UpdateFeed)
+                    paneeli_image.after(math.ceil(1/Cameras.framerate*1000), UpdateFeed)
                 
         ## -- CAMERA SETTINGS --------------------------------------------------------------------------------
         cameraFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=2, pady=10, bg="grey80")
@@ -96,10 +96,6 @@ class ConstructApp():
         cameraSettingsFrame = tk.Frame(master=cameraFrame, relief='flat', borderwidth=2, padx=5, pady=5, bg="grey60")
         cameraSettingsFrame.pack(fill=tk.X)
 
-        manualFillPrompt = tk.Label(text="Or enter settings manually:", master=cameraSettingsFrame, bg="grey60", pady=10)
-        manualFillPrompt.config(font=("Courier", 12))
-        manualFillPrompt.pack(fill=tk.X)
-
         self.inputsFrame = tk.Frame(master=cameraSettingsFrame, relief='flat', borderwidth=2)
         self.inputsFrame.pack(fill=tk.X)
         self.inputsFrame.columnconfigure(0)
@@ -107,6 +103,10 @@ class ConstructApp():
 
         # Settings inputs
         ConstructApp.exposureSetting = DigitEntry("Exposure (ms): ", 10000, 0, self.inputsFrame, trace="exposure")
+        
+        def SendGain(selection):
+            ## error handling for failure? Tkinter pop-up
+            Cameras.currentCam.GainAuto.SetValue(selection)
 
         gainSetting = tk.Label(text="Gain Setting: ", master=self.inputsFrame)
         GAINOPTIONS = [
@@ -116,16 +116,12 @@ class ConstructApp():
         ]
         ConstructApp.gainVariable = StringVar()
         ConstructApp.gainVariable.set(GAINOPTIONS[0]) # default value
-        ConstructApp.gainVariable.trace('w', SendGain)
-        w = OptionMenu(self.inputsFrame, ConstructApp.gainVariable, *GAINOPTIONS)
+        SendGain(GAINOPTIONS[0])
+        w = OptionMenu(self.inputsFrame, ConstructApp.gainVariable, *GAINOPTIONS, command=SendGain)
         w["highlightthickness"] = 0
         w.grid(row = 1, column = 1, sticky='ew', padx=5)
         gainSetting.grid(row = 1, column = 0, sticky='w', padx=5)
         
-        def SendGain():
-            Cameras.currentCam.GainAuto.SetValue(float(ConstructApp.gainVariable.get()))
-
-        ConstructApp.durationSetting = DigitEntry("Duration (s): ", 5, 2, self.inputsFrame) # don't need
         ConstructApp.frameRateSetting = DigitEntry("Framerate (fps): ", 30, 3, self.inputsFrame, trace="framerate")
 
         ## -- OUTPUT SETTINGS -----------------------------------------------------------------------------------------------
@@ -155,9 +151,8 @@ class ConstructApp():
         browseFrame.pack(fill=tk.X)
 
         def BrowseButton():
-            global folder_path
             folderName = filedialog.askdirectory()
-            folder_path.set(folderName)
+            ConstructApp.folder_path.set(folderName)
             print(folderName)
             
         button = tk.Button(browseFrame, text='Browse...', command=BrowseButton)
@@ -223,21 +218,33 @@ class ConstructApp():
         self.backgroundButton.pack(fill=tk.BOTH)
 
         ## -- START BUTTON -----------------------------------------------------------------------------------
-        ConstructApp.thresholdSetting = DigitEntry("Threshold [0, 255]: ", 100, 4, settingsFrame, lower=0, upper=255, trace="threshold")
+        startFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=5, pady=5, bg="grey60")
+        startFrame.pack(fill=tk.BOTH, padx=5)
         
-        startFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=10, pady=10, bg="grey80")
-        startFrame.pack(fill=tk.BOTH)
+        innerStartFrame = tk.Frame(master=startFrame, relief='flat', borderwidth=2, padx=5)
+        
+        ConstructApp.thresholdSetting = DigitEntry("Threshold [0, 255]: ", 100, 0, innerStartFrame, lower=0, upper=255, trace="threshold", pack=True)
 
         self.startButton = tk.Button(startFrame, text='START', command=self.StartButton, bg="red", font=("Courier", 24), fg="white", state="disabled")
-        self.startButton.pack(fill=tk.BOTH)
-
+        self.startButton.pack(fill=tk.BOTH, pady=5)
+        
         paneeli_image.after(15, UpdateFeed)
         rootWindow.mainloop()
-        
-    def ButtonTextCountDown(button, time):
-        for i in range(time, 0, -1):
-            button["text"] = str(i)
-            time.sleep(1)
+    
+    def ButtonTextCountDown(self, label, thread):
+        self.backgroundButton["text"] = str(label)
+
+        if not thread.is_alive():
+            self.backgroundButton["text"] = "RESTART"
+            self.backgroundButton.configure(bg = "red")
+            self.backgroundButton["state"] = "normal"
+            self.startButton.configure(bg = "DarkSeaGreen")
+            self.startButton["state"] = "normal"
+        else:
+            if (isinstance(label, int) or isinstance(label, float)) and label != 0:
+                self.backgroundButton.after(1000, self.ButtonTextCountDown, label-1, thread)
+            else:
+                self.backgroundButton.after(1000, self.ButtonTextCountDown, "...", thread)
             
     def BackgroundButton(self):
         if self.backgroundButton["text"] == "TRAIN":
@@ -246,46 +253,44 @@ class ConstructApp():
             for child in self.inputsFrame.winfo_children():
                 child.configure(state='disable')
             
-            measurer = MeasurerInstance(ConstructApp.folder_path.get(), ConstructApp.outputFormatVariable.get())
+            self.measurer = MeasurerInstance(ConstructApp.folder_path.get(), ConstructApp.outputFormatVariable.get())
             
             # Thread the Tkinter button countdown
-            x = threading.Thread(target=ConstructApp.ButtonTextCountDown, args=(self.backgroundButton, 10,), daemon=True)
+            # x = threading.Thread(target=ConstructApp.ButtonTextCountDown, args=(self.backgroundButton, 10,), daemon=True)
+            # x.start()
+            x = threading.Thread(target=self.measurer.TrainBackground, daemon=True)
             x.start()
-            # if doesn't work, can place a timer in the TrainBackground method and put the for loop here instead of in the measurer
             
-            # Train our background for later subtraction
-            measurer.TrainBackground()
-            
-            # Reconfigure the buttons
-            self.backgroundButton["text"] = "RESTART"
-            self.backgroundButton.configure(bg = "red")
-            self.backgroundButton["state"] == "normal"
-            self.startButton.configure(bg = "DarkSeaGreen")
-            self.startButton["state"] == "normal"
-            
-            ## trigger threshold camera view
+            self.backgroundButton.after(1000, self.ButtonTextCountDown, 20, x)
             
         elif self.backgroundButton["text"] == "RESTART":
             # Reconfigure buttons and delete the previous instance
             self.backgroundButton["text"] = "TRAIN"
             self.backgroundButton.configure(bg = "DarkSeaGreen")
             self.startButton.configure(bg = "red")
-            self.startButton["state"] == "disabled"
+            self.startButton["state"] = "disabled"
             
             # Unlock settings
             for child in self.inputsFrame.winfo_children():
                 child.configure(state='normal')
             
             Cameras.DisconnectMeasurer()
-            measurer = None
+            self.measurer = None
             
     def StartButton(self):
-        self.backgroundButton["state"] == "disabled"
-        self.startButton["state"] == "disabled"
+        self.backgroundButton["state"] = "disabled"
+        self.startButton["state"] = "disabled"
         ConstructApp.thresholdSetting.Activate(False)
         
-        Cameras.active_measurer.Skeletonize()
-        
-        self.startButton["state"] == "normal"
-        self.backgroundButton["state"] == "normal"
-        ConstructApp.thresholdSetting.Activate(True)
+        skeletonThread = threading.Thread(target=Cameras.TriggerSkeletonize, daemon=True)
+        skeletonThread.start()
+    
+        self.startButton.after(1000, self.ReinstateSetting, skeletonThread)
+    
+    def ReinstateSetting(self, thread):
+        if thread.is_alive():
+            self.startButton.after(1000, self.ReinstateSetting, thread)
+        else:
+            ConstructApp.thresholdSetting.Activate(True)
+            self.startButton["state"] = "normal"
+            self.backgroundButton["state"] = "normal"
