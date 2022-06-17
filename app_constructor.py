@@ -102,7 +102,7 @@ class ConstructApp():
         self.inputsFrame.columnconfigure(1, weight=1)
 
         # Settings inputs
-        ConstructApp.exposureSetting = DigitEntry("Exposure (ms): ", 10000, 0, self.inputsFrame, trace="exposure")
+        ConstructApp.exposureSetting = DigitEntry("Exposure (ms): ", 100, 0, self.inputsFrame, trace="exposure")
         
         def SendGain(selection):
             ## error handling for failure? Tkinter pop-up
@@ -155,8 +155,8 @@ class ConstructApp():
             ConstructApp.folder_path.set(folderName)
             print(folderName)
             
-        button = tk.Button(browseFrame, text='Browse...', command=BrowseButton)
-        button.grid(row=0, column=0, sticky="nsew")
+        ConstructApp.button = tk.Button(browseFrame, text='Browse...', command=BrowseButton)
+        ConstructApp.button.grid(row=0, column=0, sticky="nsew")
 
         ConstructApp.folder_path = StringVar()
         ConstructApp.folder_path.set(os.getcwd())
@@ -180,9 +180,9 @@ class ConstructApp():
         ]
         ConstructApp.outputFormatVariable = StringVar()
         ConstructApp.outputFormatVariable.set(OPTIONS[0]) # default value
-        w = OptionMenu(formatFrame, ConstructApp.outputFormatVariable, *OPTIONS)
-        w["highlightthickness"] = 0
-        w.grid(row = 0, column = 1, sticky='ew', padx=5, pady=5)
+        ConstructApp.w = OptionMenu(formatFrame, ConstructApp.outputFormatVariable, *OPTIONS)
+        ConstructApp.w["highlightthickness"] = 0
+        ConstructApp.w.grid(row = 0, column = 1, sticky='ew', padx=5, pady=5)
 
         # Fish ID and freetext
         watermarkFrame = tk.Frame(master=outputSettingsFrame, relief='flat', borderwidth=2, bg="grey60", padx=5, pady=2)
@@ -245,13 +245,20 @@ class ConstructApp():
                 self.backgroundButton.after(1000, self.ButtonTextCountDown, label-1, thread)
             else:
                 self.backgroundButton.after(1000, self.ButtonTextCountDown, "...", thread)
-            
-    def BackgroundButton(self):
-        if self.backgroundButton["text"] == "TRAIN":
-            # Locking
+                
+    def BackgroundButtonsActive(self, status):
+        if status:
+            self.backgroundButton["state"] = "normal"
+            for child in self.inputsFrame.winfo_children():
+                child.configure(state='normal')
+        else:
             self.backgroundButton["state"] = "disabled"
             for child in self.inputsFrame.winfo_children():
                 child.configure(state='disable')
+            
+    def BackgroundButton(self):
+        if self.backgroundButton["text"] == "TRAIN":
+            self.BackgroundButtonsActive(False)
             
             self.measurer = MeasurerInstance(ConstructApp.folder_path.get(), ConstructApp.outputFormatVariable.get())
             
@@ -271,8 +278,7 @@ class ConstructApp():
             self.startButton["state"] = "disabled"
             
             # Unlock settings
-            for child in self.inputsFrame.winfo_children():
-                child.configure(state='normal')
+            self.BackgroundButtonsActive(True)
             
             Cameras.DisconnectMeasurer()
             self.measurer = None
@@ -281,6 +287,13 @@ class ConstructApp():
         self.backgroundButton["state"] = "disabled"
         self.startButton["state"] = "disabled"
         ConstructApp.thresholdSetting.Activate(False)
+        ConstructApp.fishIDEntry["state"] = "disabled"
+        ConstructApp.additionalText["state"] = "disabled"
+        ConstructApp.w["state"] = "disabled"
+        ConstructApp.button["state"] = "disabled"
+        
+        self.measurer.outputFolder = ConstructApp.folder_path.get()
+        self.measurer.format = ConstructApp.outputFormatVariable.get()
         
         skeletonThread = threading.Thread(target=Cameras.TriggerSkeletonize, daemon=True)
         skeletonThread.start()
@@ -294,3 +307,8 @@ class ConstructApp():
             ConstructApp.thresholdSetting.Activate(True)
             self.startButton["state"] = "normal"
             self.backgroundButton["state"] = "normal"
+            ConstructApp.fishIDEntry["state"] = "normal"
+            ConstructApp.additionalText["state"] = "normal"
+            ConstructApp.w["state"] = "normal"
+            ConstructApp.button["state"] = "normal"
+            

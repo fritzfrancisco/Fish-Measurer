@@ -36,20 +36,21 @@ class DigitEntry():
             self.set(''.join(x for x in value if x.isdigit()))
             value = self.get()
         
-        if self.lower:
-            if float(value) < self.lower:
-                self.set(self.lower)
-        if self.upper:
-            if float(value) > self.upper:
-                self.set(self.upper)
-        if not (not self.trace):
-            if self.trace == "exposure":
-                Cameras.currentCam.ExposureTime.SetValue(float(self.get()))
-            elif self.trace == "framerate":
-                Cameras.currentCam.AcquisitionFrameRateEnable.SetValue(True)
-                Cameras.currentCam.AcquisitionFrameRate.SetValue(float(self.get()))
-            else:
-                MeasurerInstance.threshold = float(self.get())
+        if value:
+            if self.lower:
+                if float(value) < self.lower:
+                    self.set(self.lower)
+            if self.upper:
+                if float(value) > self.upper:
+                    self.set(self.upper)
+            if not (not self.trace):
+                if self.trace == "exposure":
+                    Cameras.currentCam.ExposureTime.SetValue(float(self.get()) if float(self.get()) >= 42 else 42)
+                elif self.trace == "framerate":
+                    Cameras.currentCam.AcquisitionFrameRateEnable.SetValue(True)
+                    Cameras.currentCam.AcquisitionFrameRate.SetValue(float(self.get()))
+                else:
+                    MeasurerInstance.threshold = float(self.get())
     
     def ChangeValue(self, newVal):
         self.set(newVal)

@@ -5,10 +5,13 @@ from PIL import Image, ImageTk
 import cv2
 import time
 import threading
+import numpy as np
 
 class Cameras():
     currentCam = None
     global current_frame
+    global binarized_frame
+    global raw_frame
     
     def __init__(self, **kwargs):
         # converter for opencv bgr format
@@ -18,10 +21,17 @@ class Cameras():
         
         # Status variables
         global current_frame
+        global binarized_frame
+        global raw_frame
+        
         current_frame = None
+        raw_frame = None
+        binarized_frame = None
+        
         Cameras.new_frame = False
         Cameras.framerate = 30
         Cameras.active_measurer = None
+        Cameras.lock = threading.Lock()
         
         # Get the available cameras
         tlFactory = pylon.TlFactory.GetInstance()
@@ -37,19 +47,15 @@ class Cameras():
             Cameras.currentCam = Cameras.cameras[0]
             Cameras.connected = True
             Cameras.StartGrabbing()
-    
-    def ApplySettings(measurer, **kwargs):
-        Cameras.currentCam.ExposureTime.SetValue(float(kwargs["exposure"]))
-        Cameras.currentCam.GainAuto.SetValue(kwargs["gain"])
-        Cameras.currentCam.AcquisitionFrameRateEnable.SetValue(True)
-        Cameras.currentCam.AcquisitionFrameRate.SetValue(float(kwargs["framerate"]))
-        Cameras.framerate = float(kwargs["framerate"])
         
     def ConnectMeasurer(measurer):
         Cameras.active_measurer = measurer
+        print("made it")
     
     def DisconnectMeasurer():
         Cameras.active_measurer = None
+        print("disconnect")
+        
         
     def StopGrabbing():
         try:
@@ -90,29 +96,44 @@ class Cameras():
             Cameras.connected = False # will automatically shut down app in constructor
     
     def TriggerSkeletonize():
-        global current_frame
         Cameras.active_measurer.SkeletonizeFrames(Cameras.GetFixedNumFrames(2))
     
     def SetNewFrame(frame):
         global current_frame
+        global binarized_frame
+        global raw_frame
+        
+        Cameras.lock.acquire()
+        raw_frame = frame
         if Cameras.active_measurer is not None and Cameras.active_measurer.background is not None:
-            current_frame = Cameras.active_measurer.ProcessImage(frame)
+            binarized_frame = Cameras.active_measurer.ProcessImage(raw_frame)
+            current_frame = binarized_frame
         else:
+            binarized_frame = None
             current_frame = frame
         
         Cameras.new_frame = True
+        Cameras.lock.release()
             
     def GetFixedNumFrames(images_to_grab):
-        image_list = []
-        global current_frame
+        global binarized_frame
+        global raw_frame
         
-        while len(image_list) < images_to_grab:
+        raw_list = []
+        binarized_list = []
+        while len(raw_list) < images_to_grab:
+            Cameras.lock.acquire()
+            
             if Cameras.new_frame:
                 Cameras.new_frame = False
-                image_list.append(current_frame)
+                raw_list.append(raw_frame)
+                binarized_list.append(binarized_frame)
+                
+                Cameras.lock.release()
+                
             time.sleep(1/Cameras.framerate)
-        
-        return image_list
+            
+        return (raw_list, binarized_list)
 
     def UpdateCamera(fishID=None, addText=None):
         if current_frame is not None:
