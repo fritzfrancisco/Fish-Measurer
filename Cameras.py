@@ -50,12 +50,11 @@ class Cameras():
         
     def ConnectMeasurer(measurer):
         Cameras.active_measurer = measurer
-        print("made it")
+        print("connected measurer")
     
     def DisconnectMeasurer():
         Cameras.active_measurer = None
         print("disconnect")
-        
         
     def StopGrabbing():
         try:
@@ -83,6 +82,7 @@ class Cameras():
                 image = Cameras.converter.Convert(grabResult)
                 img = image.GetArray()
                 frame=cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
+                grabResult.Release()
                 
                 Cameras.SetNewFrame(frame)
         
@@ -129,8 +129,9 @@ class Cameras():
                 raw_list.append(raw_frame)
                 binarized_list.append(binarized_frame)
                 
-                Cameras.lock.release()
+            Cameras.lock.release()
                 
+            print(str(len(raw_list)) + " out of " + str(images_to_grab))
             time.sleep(1/Cameras.framerate)
             
         return (raw_list, binarized_list)
