@@ -102,7 +102,7 @@ class ConstructApp():
         self.inputsFrame.columnconfigure(1, weight=1)
 
         # Settings inputs
-        ConstructApp.exposureSetting = DigitEntry("Exposure (ms): ", 100, 0, self.inputsFrame, trace="exposure")
+        ConstructApp.exposureSetting = DigitEntry("Exposure (ms): ", 10000, 0, self.inputsFrame, trace="exposure")
         
         def SendGain(selection):
             ## error handling for failure? Tkinter pop-up
