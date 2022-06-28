@@ -102,7 +102,7 @@ class ConstructApp():
         self.inputsFrame.columnconfigure(1, weight=1)
 
         # Settings inputs
-        ConstructApp.exposureSetting = DigitEntry("Exposure (ms): ", 10000, 0, self.inputsFrame, trace="exposure")
+        ConstructApp.exposureSetting = DigitEntry("Exposure (ms): ", 100, 0, self.inputsFrame, trace="exposure")
         
         def SendGain(selection):
             ## error handling for failure? Tkinter pop-up
@@ -298,14 +298,24 @@ class ConstructApp():
         skeletonThread = threading.Thread(target=Cameras.TriggerSkeletonize, daemon=True)
         skeletonThread.start()
     
-        self.startButton.after(1000, self.ReinstateSetting, skeletonThread)
+        self.startButton.after(1000, self.ReinstateSetting, skeletonThread, 0)
     
-    def ReinstateSetting(self, thread):
+    def ReinstateSetting(self, thread, count):
         if thread.is_alive():
-            self.startButton.after(1000, self.ReinstateSetting, thread)
+            count+=1
+            if count == 1:
+                self.startButton["text"] = "."
+            elif count == 2:
+                self.startButton["text"] = ".."
+            elif count == 3:
+                self.startButton["text"] = "..."
+                count = 0
+            
+            self.startButton.after(1000, self.ReinstateSetting, thread, count)
         else:
             ConstructApp.thresholdSetting.Activate(True)
             self.startButton["state"] = "normal"
+            self.startButton["text"] = "START"
             self.backgroundButton["state"] = "normal"
             ConstructApp.fishIDEntry["state"] = "normal"
             ConstructApp.additionalText["state"] = "normal"

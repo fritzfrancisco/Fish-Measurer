@@ -4,10 +4,10 @@ import numpy as np
 from fil_finder import FilFinder2D
 import astropy.units as u
 import math
+import statistics
 import os
 from datetime import datetime
-from skimage.morphology import skeletonize, thin, medial_axis
-from scipy.ndimage import convolve
+from skimage.morphology import skeletonize
 
 class MeasurerInstance():
     def __init__(self, outputFolder, format, min_skel_size=0.01, max_curvature=50):
@@ -15,6 +15,9 @@ class MeasurerInstance():
         self.outputFolder = outputFolder
         self.format = format
         self.background = None
+        self.filament_lengths = []
+        self.length_avg = None
+        self.stdev = None
         MeasurerInstance.threshold = None 
         MeasurerInstance.fishID = None
         MeasurerInstance.addText = None
@@ -42,13 +45,12 @@ class MeasurerInstance():
         self.background = fgmask
     
     def SkeletonizeFrames(self, frames):
-        self.current_best = {}
+        self.measurements = {}
         self.current_images = {}
         
         (raw, binarized) = frames
         
         for i in range(len(raw)):
-            start_time = datetime.now()
             # Apply morphological operations (image processing)
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
             closing = cv2.morphologyEx(binarized[i], cv2.MORPH_CLOSE, kernel, iterations=3)
@@ -59,42 +61,21 @@ class MeasurerInstance():
             self.processed_image = cv2.addWeighted(cv2.cvtColor(raw[i], cv2.COLOR_BGR2GRAY),0.7,opening,0.3,0)
             self.processed_image = cv2.addWeighted(self.gradient,0.2,self.processed_image,0.8,0)
             
-            print("morph ops: " + str((datetime.now() - start_time).total_seconds()))
-            start_time = datetime.now()
+            # print("morph ops: " + str((datetime.now() - start_time).total_seconds()))
             
-            skeleton_mask = cv2.ximgproc.thinning(opening)
-            print("skeletonization cv2: " + str((datetime.now() - start_time).total_seconds()))
-            binarized_open = np.round_(opening / 255).astype('uint8')
-            start_time = datetime.now()
+            # skeleton_mask = cv2.ximgproc.thinning(opening)
+            # print("skeletonization cv2: " + str((datetime.now() - start_time).total_seconds()))
             
-            # skeleton = skeletonize(binarized_open)
+            skeleton = skeletonize(np.round_((opening / 255).astype('uint8')))
+            # skel = medial_axis(opening)
             
-            # print("skeletonization scikit: " + str((datetime.now() - start_time).total_seconds()))
-            # start_time = datetime.now()
-            
-            # # thinned = thin(binarized_open)
-            
-            # # print("thinning scikit: " + str((datetime.now() - start_time).total_seconds()))
-            # # start_time = datetime.now()
-            
-            # skel, distance = medial_axis(binarized_open, return_distance=True)
-            
-            # print("skel med axis scikit: " + str((datetime.now() - start_time).total_seconds()))
-            # start_time = datetime.now()
-            
-            # skel_list = [skeleton_mask, opening, np.round_(skeleton * 255).astype('uint8'), np.round_(skel * 255).astype('uint8')]
-            
-            # for item in skel_list:
-            #     temp = cv2.resize(item, None, fy=0.3, fx=0.3)
-            #     cv2.imshow("skele", temp) 
-            #     cv2.waitKey(0)
-            
-            fil = FilFinder2D(skeleton_mask, distance=1500*u.pix, mask=skeleton_mask)
+            fil = FilFinder2D(skeleton, distance=1500*u.pix, mask=skeleton)
             fil.create_mask(verbose=False, use_existing_mask=True)
             fil.medskel(verbose=False)
             
             # Skeletons must be at least 50 pixels long to count
-            fil.analyze_skeletons(skel_thresh=self.min_skel_size*u.pix)
+            start_time = datetime.now()
+            fil.analyze_skeletons(skel_thresh=self.min_skel_size*u.pix, prune_criteria='length', branch_thresh=1500*u.pix, max_prune_iter=30)
             
             print("filament creation: " + str((datetime.now() - start_time).total_seconds()))
             start_time = datetime.now()
@@ -113,23 +94,27 @@ class MeasurerInstance():
                 continue
                 
             self.current_images = {"processed": self.processed_image, "contour": self.gradient, "threshed": opening, "raw": cv2.cvtColor(raw[i], cv2.COLOR_BGR2GRAY)}
+            fil_length, curvature = self.AssessFilament(filament)
             
-            (accepted, statement) = self.AssessFilament(filament)
-            print("assess filament: " + str((datetime.now() - start_time).total_seconds()))
-            start_time = datetime.now()
-            
-            print("frame: " + str(i) + "; " + statement)
-            if not accepted:
-                continue
-            else:
-                self.current_best["frame"] = i
+            # Save the data from the frame
+            self.filament_lengths.append((i, fil_length))
+            self.measurements[i] = {"length": fil_length, "curvature": curvature, "images": self.current_images}
 
-        if not self.current_best:
-            print("dict empty")
-        else:
-            print("\nFinal: " + str(self.current_best["curvature"]) + "; " + str(self.current_best["length"]) + "; " + str(self.current_best["frame"]))
+        # Remove outliers
+        if self.filament_lengths:
+            self.length_avg = statistics.mean([lens for i, lens in self.filament_lengths])
+            refined_list = [(fil_length, self.measurements[i]["curvature"], i) for i, fil_length in self.filament_lengths if abs((fil_length - self.length_avg) / self.length_avg) <= 0.1]
+            split_list = [list(t) for t in zip(*refined_list)]
             
-            chosen_image = MeasurerInstance.WatermarkImage(self.current_best)
+            self.length_stats = (statistics.mean(split_list[0]), statistics.stdev(split_list[0]))
+            self.curve_stats = (statistics.mean(split_list[1]), statistics.stdev(split_list[1]))  
+            
+            # find the instane with the closest length value
+            closest_index = split_list[0].index(min(split_list[0], key=lambda x:abs(x-self.length_stats[0])))
+            closest_instance = self.measurements[split_list[2][closest_index]]
+            
+            print("\nFinal: " + str(self.curve_stats[0]) + "; " + str(self.length_stats[0]) + "; " + str(closest_index))
+            chosen_image = MeasurerInstance.WatermarkImage(closest_instance, self.length_stats, self.curve_stats)
             
             # Save it and open it
             if MeasurerInstance.fishID != None and MeasurerInstance.fishID != '':
@@ -138,15 +123,22 @@ class MeasurerInstance():
             else:
                 state = cv2.imwrite(os.path.join(self.outputFolder, str(datetime.now().strftime("%d-%m-%Y_%H-%M-%S")) + \
                     str(self.format)), chosen_image)
+        else:
+            print("could not get lengths")
+            # could not read anything
+        ## IF STATE ERROR MESSAGE
                 
-            print(state)
-    
-    def WatermarkImage(current_best):
+    def WatermarkImage(closest_instance, length_stats, curve_stats):
         # Watermark the results
-        chosen_image = cv2.putText(current_best["images"]["processed"], 
-                                   "Curvature (deg): " + "{:.2f}".format(current_best["curvature"] * 180 / math.pi) + "; Length (m): " + \
-                                       "{:.2f}".format(current_best["length"]),
-                                   (15, current_best["images"]["processed"].shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
+        chosen_image = cv2.putText(closest_instance["images"]["processed"], 
+                                    "Curvature (deg): " + "{:.2f}".format(curve_stats[0] * 180 / math.pi) + \
+                                    " +/- " + "{:.2f}".format(curve_stats[1] * 180 / math.pi),
+                                    (15, closest_instance["images"]["processed"].shape[0]-120), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
+        
+        chosen_image = cv2.putText(chosen_image, 
+                                    "Length (m): " +  "{:.2f}".format(length_stats[0]) + \
+                                    " +/- " + "{:.2f}".format(length_stats[1]),
+                                    (15, chosen_image.shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
         # Add metadata
         chosen_image = cv2.putText(chosen_image, datetime.now().strftime("%d.%m.%Y %H:%M:%S"), (15, 70), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
@@ -173,27 +165,18 @@ class MeasurerInstance():
         fil_curvature = filament.curvature.value
         fil_orientation = filament.orientation.value
         
+        # Get the pixels on the longpath and all the [many] branch endpoints
+        # the longpath pixels are not in order, and so we need to find the
+        # endpoints of this path manually
         longpath_pixel_coords = filament.longpath_pixel_coords
-        
         long_zipped = list(zip(longpath_pixel_coords[0], longpath_pixel_coords[1]))
-        # end_pts = [long_zipped[0], long_zipped[-1]]
-        # print(end_pts)
-            
-        # for i, item in enumerate(filament.branch_properties["pixels"]):
-        #     print("branch: " + str(i) + ";", str(item[0]), str(item[-1]))
-        
-        # https://people.eecs.berkeley.edu/~vazirani/sp04/notes/dijkstra.pdf
-        # https://stackoverflow.com/questions/41632271/find-the-end-of-a-curved-line-in-a-binary-image
-        # need to construct edges --> find the closest point to each point and connect them with an edge
-        
-        # OR use neighborhood kernel on end points?
-        # with refined list (maybe one branch is really close to the filament), proceed
-        
         end_pt_coords = filament.end_pts
         longpath_pixel_coords_array = np.asarray(longpath_pixel_coords)
+        
         end_candidates = []
         list_max = 1000000
         for pt in end_pt_coords:
+            # Get the distance from each endpoint to all other points on the longpath
             pt_array = np.asarray(pt).reshape((2,1))
             dist_mat = np.linalg.norm(np.subtract(longpath_pixel_coords_array, pt_array), axis=0)
         
@@ -208,40 +191,38 @@ class MeasurerInstance():
                     end_candidates.append((pt, min_dist))
                     list_max = max([dist for coord, dist in end_candidates])
                     
-        print(end_candidates)
+        ## There might be others with 0 distance (ie, at the -1 pixels position). Need to consider
+        ## for now leave it, the user can restart
         end_pts = [coord for coord, dist in end_candidates]
+        
+        # Fill in the image matrices
+        # kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         
         longest_path_mat = np.zeros(dimensions)
         for y, x in long_zipped:
             longest_path_mat[y-1][x-1] = 1
-
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        
-        end_pt_mat = np.zeros(dimensions)
-        for y, x in end_pts:
-            end_pt_mat[y-1][x-1] = 1
-        end_pt_mat = cv2.dilate(end_pt_mat, kernel, iterations=3)
-            
-        for y, x in end_pt_coords:
-            end_pt_mat[y-1][x-1] = 1
-        end_pt_mat = cv2.dilate(end_pt_mat, kernel, iterations=3)
-        
-        longest_path_mat = cv2.dilate(longest_path_mat, kernel, iterations=3)
-        
-        temp = cv2.addWeighted((end_pt_mat * 255).astype('uint8'), 0.7, (longest_path_mat * 255).astype('uint8'), 0.3, 0)
-        temp = cv2.resize(temp, None, fy=0.45, fx=0.45)
-        cv2.imshow("thing", temp) 
-        cv2.waitKey(0)
-        
         self.current_images["long_path"] = longest_path_mat
+
+        # end_pt_mat = np.zeros(dimensions)
+        # for y, x in end_pts:
+        #     end_pt_mat[y-1][x-1] = 1
+        # end_pt_mat = cv2.dilate(end_pt_mat, kernel, iterations=3)
+            
+        # for y, x in end_pt_coords:
+        #     end_pt_mat[y-1][x-1] = 1
+        # end_pt_mat = cv2.dilate(end_pt_mat, kernel, iterations=3)
         
+        # temp = cv2.addWeighted((end_pt_mat * 255).astype('uint8'), 0.7, (longest_path_mat * 255).astype('uint8'), 0.3, 0)
+        # temp = cv2.resize(temp, None, fy=0.5, fx=0.5)
+        # cv2.imshow("thing", temp) 
+        # cv2.waitKey(0)
+        
+        # Run the intersection exercise for each end point to determine
+        # how much length to add onto the ends of the longpath
         slope = math.cos(fil_orientation) / math.sin(fil_orientation)
-        # run the intersection exercise for each end point
         for y_pt, x_pt in end_pts:
             # Get the line equation passing through the end point
             line_mask = np.zeros(dimensions)
-            added_lines = np.zeros(dimensions)
-            
             b = dimensions[0] - y_pt - slope * x_pt
             
             for x in range(dimensions[1]):
@@ -249,23 +230,30 @@ class MeasurerInstance():
                 y = round(slope * x + b)
                 y_next = round(slope * (x + 1) + b)
                 
-                y_start = y_prev + round((y - y_prev) / 2)
-                y_end = y + round((y_next - y) / 2)
+                if y < dimensions[0] - 1 and y >= 0:
+                    line_mask[dimensions[0] - 1 - y][x] = 1
                 
-                y_step = 1 if y_start <= y_end else -1
-                for y in range(y_start, y_end, y_step):
-                    if y < dimensions[0] - 1 and y >= 0:
-                        line_mask[dimensions[0] - 1 - y][x] = 1
+                # Fill in as many pixels as needed to keep a continuous line,
+                # keeping to a 50% tributary width (hence dividing by 2)
+                # otherwise we have a dotted line
+                if y_prev != y_next:
+                    y_start = y_prev + round((y - y_prev) / 2)
+                    y_end = y + round((y_next - y) / 2)
+                    
+                    y_step = 1 if y_start <= y_end else -1
+                    for y in range(y_start, y_end, y_step):
+                        if y < dimensions[0] - 1 and y >= 0:
+                            line_mask[dimensions[0] - 1 - y][x] = 1
             
-            # Find where the fish boundary and the line intersect
+            # Find where the thresholded fish boundary and the line intersect
             # There will be multiple points since the contour is not one-pixel thick
             contour_array_normalized = np.round(self.current_images["contour"] / 255)
             combined_array = np.add(line_mask, contour_array_normalized)
-            pts_of_interest = zip(*np.where(combined_array > 1.5)) 
             
+            pts_of_interest = list(zip(*np.where(combined_array > 1.5)))
             reference = np.array([y_pt, x_pt])
             
-            # Get minimum distance end point to contour and add to the filament length
+            # Get minimum distance from end point to contour and add to filament
             minimum_distance = None
             min_point_set = None
             for y, x in pts_of_interest:
@@ -281,40 +269,43 @@ class MeasurerInstance():
             fil_length += minimum_distance
             added_dist += minimum_distance
             
-            # add the end points of the longest path and make them more visible
-            # kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-            # added_lines[reference[0]][reference[1]] = 1
-            # added_lines = cv2.dilate(added_lines, kernel, iterations=2)
-            
             # Fill in the skeletonized long path array with these extensions
             step_size = 1 if x_pt <= min_point_set[1] else -1
-            for x in range(x_pt, min_point_set[1], step_size):
+            for x in range(x_pt, min_point_set[1] + step_size, step_size):
                 y_prev = round(slope * (x - step_size) + b)
                 y = round(slope * x + b)
                 y_next = round(slope * (x + step_size) + b)
                 
-                # Fill in as many pixels as needed to keep a continuous line,
-                # keeping to a 50% tributary width (hence dviding by 2)
-                y_start = y_prev + round((y - y_prev) / 2)
-                y_end = y + round((y_next - y) / 2)
-                
-                y_step = 1 if y_start <= y_end else -1
-                for y in range(y_start, y_end, y_step):
-                    if y < dimensions[0] - 1 and y >= 0:
-                        added_lines[dimensions[0] - 1 - y][x] = 1
+                if dimensions[0] - min_point_set[0] >= dimensions[0] - y_pt:
+                    if y <= dimensions[0] - min_point_set[0] and y >= dimensions[0] - y_pt:
+                        self.current_images["long_path"][dimensions[0] - 1 - y][x] = 1
+                else:
+                    if y <= dimensions[0] - y_pt and y >= dimensions[0] - min_point_set[0]:
+                        self.current_images["long_path"][dimensions[0] - 1 - y][x] = 1
                     
-            # added_lines = cv2.dilate(added_lines, kernel)
-            # self.current_images["long_path"] = np.add(self.current_images["long_path"], added_lines)
-
-        self.current_images["long_path"] = np.where(self.current_images["long_path"] > 1, 1, self.current_images["long_path"])
-        temp = cv2.resize(self.current_images["long_path"], None, fy=0.45, fx=0.45)
-        cv2.imshow("long_path", temp) 
-        cv2.waitKey(0)
-        
+                if y_prev != y_next:
+                    y_start = y_prev + round((y - y_prev) / 2)
+                    y_end = y + round((y_next - y) / 2)
+                    
+                    y_step = 1 if y_start <= y_end else -1
+                    for y in range(y_start, y_end, y_step):
+                        if dimensions[0] - min_point_set[0] >= dimensions[0] - y_pt:
+                            if y <= dimensions[0] - min_point_set[0] and y >= dimensions[0] - y_pt:
+                                self.current_images["long_path"][dimensions[0] - 1 - y][x] = 1
+                        else:
+                            if y <= dimensions[0] - y_pt and y >= dimensions[0] - min_point_set[0]:
+                                self.current_images["long_path"][dimensions[0] - 1 - y][x] = 1
+                    
+        self.current_images["long_path"] = np.where(self.current_images["long_path"] > 1, 1, self.current_images["long_path"])        
         print(slope, fil_curvature, "fil length: " + str(fil_length), "added length: " + str(added_dist))
+        
+        image = MeasurerInstance.ShowImage(self.current_images["processed"], (self.current_images["long_path"] * 255).astype('uint8'), name="binarized") 
+        self.current_images["processed"] = image
+        
+        return fil_length, fil_curvature
             
         # Compare to current best filament
-        if not any(self.current_best):
+        if not any(self.measurements):
             return self.CompareFilamentProperties(fil_curvature, fil_length) # will create the dictionary
         elif fil_length <= self.current_best["length"]:
             return (False, "filament too short")

@@ -60,7 +60,7 @@ class DigitEntry():
     
     def Activate(self, status):
         if status:
-            self.entry["state"] == "disabled"
+            self.entry["state"] = "normal"
         else:
-            self.entry["state"] == "normal"
+            self.entry["state"] = "disabled"
             

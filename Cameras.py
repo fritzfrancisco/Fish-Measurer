@@ -96,7 +96,7 @@ class Cameras():
             Cameras.connected = False # will automatically shut down app in constructor
     
     def TriggerSkeletonize():
-        Cameras.active_measurer.SkeletonizeFrames(Cameras.GetFixedNumFrames(2))
+        Cameras.active_measurer.SkeletonizeFrames(Cameras.GetFixedNumFrames(3))
     
     def SetNewFrame(frame):
         global current_frame
