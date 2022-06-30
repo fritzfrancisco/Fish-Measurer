@@ -8,6 +8,7 @@ import statistics
 import os
 from datetime import datetime
 from skimage.morphology import skeletonize
+import pandas as pd
 
 class MeasurerInstance():
     def __init__(self, outputFolder, format, min_skel_size=0.01, max_curvature=50):
@@ -23,12 +24,15 @@ class MeasurerInstance():
         MeasurerInstance.addText = None
 
         self.max_curvature = math.pi / 180 * max_curvature
-        self.min_skel_size = MeasurerInstance.ConvertPixelsToLength(min_skel_size)
+        self.min_skel_size = MeasurerInstance.ConvertLengthToPixels(min_skel_size)
         
         Cameras.ConnectMeasurer(self)
         
     def ConvertPixelsToLength(pixels):
-        return pixels * 5000
+        return pixels * (4.4 * 10.0) / 355.6247404241471
+
+    def ConvertLengthToPixels(length):
+        return length / (4.4 * 10.0) * 355.6247404241471
 
     def ProcessImage(self, frame):
         fgmask = self.fgbg.apply(frame, learningRate=0)
@@ -53,32 +57,27 @@ class MeasurerInstance():
         for i in range(len(raw)):
             # Apply morphological operations (image processing)
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-            closing = cv2.morphologyEx(binarized[i], cv2.MORPH_CLOSE, kernel, iterations=3)
-            opening = cv2.morphologyEx(closing, cv2.MORPH_CLOSE, kernel)
             
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            # Fill all contours
+            des = binarized[i]
+            contour, hier = cv2.findContours(des,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contour:
+                cv2.drawContours(des,[cnt],-1,255,thickness=cv2.FILLED)
+            
+            opening = cv2.morphologyEx(des, cv2.MORPH_OPEN, kernel)
             self.gradient = cv2.morphologyEx(opening, cv2.MORPH_GRADIENT, kernel) 
             self.processed_image = cv2.addWeighted(cv2.cvtColor(raw[i], cv2.COLOR_BGR2GRAY),0.7,opening,0.3,0)
             self.processed_image = cv2.addWeighted(self.gradient,0.2,self.processed_image,0.8,0)
             
-            # print("morph ops: " + str((datetime.now() - start_time).total_seconds()))
-            
-            # skeleton_mask = cv2.ximgproc.thinning(opening)
-            # print("skeletonization cv2: " + str((datetime.now() - start_time).total_seconds()))
-            
+            # skeleton = cv2.ximgproc.thinning(opening)
             skeleton = skeletonize(np.round_((opening / 255).astype('uint8')))
-            # skel = medial_axis(opening)
             
             fil = FilFinder2D(skeleton, distance=1500*u.pix, mask=skeleton)
             fil.create_mask(verbose=False, use_existing_mask=True)
             fil.medskel(verbose=False)
             
             # Skeletons must be at least 50 pixels long to count
-            start_time = datetime.now()
-            fil.analyze_skeletons(skel_thresh=self.min_skel_size*u.pix, prune_criteria='length', branch_thresh=1500*u.pix, max_prune_iter=30)
-            
-            print("filament creation: " + str((datetime.now() - start_time).total_seconds()))
-            start_time = datetime.now()
+            fil.analyze_skeletons(skel_thresh=self.min_skel_size*u.pix)
             
             # Attempt to grab the relevant filament
             filament = None
@@ -95,6 +94,10 @@ class MeasurerInstance():
                 
             self.current_images = {"processed": self.processed_image, "contour": self.gradient, "threshed": opening, "raw": cv2.cvtColor(raw[i], cv2.COLOR_BGR2GRAY)}
             fil_length, curvature = self.AssessFilament(filament)
+            # fil_length = MeasurerInstance.ConvertPixelsToLength(fil_length)
+            print("frame: " + str(i), "fil length: " + str(fil_length), "curvature: " + str(curvature))
+            
+            state = cv2.imwrite(os.path.join(self.outputFolder, str(i) + str(self.format)), self.current_images["processed"])
             
             # Save the data from the frame
             self.filament_lengths.append((i, fil_length))
@@ -107,7 +110,10 @@ class MeasurerInstance():
             split_list = [list(t) for t in zip(*refined_list)]
             
             self.length_stats = (statistics.mean(split_list[0]), statistics.stdev(split_list[0]))
-            self.curve_stats = (statistics.mean(split_list[1]), statistics.stdev(split_list[1]))  
+            self.curve_stats = (statistics.mean(split_list[1]), statistics.stdev(split_list[1])) 
+            
+            df = pd.DataFrame(data={"frame_number": split_list[2], "length_mm": split_list[0], "curvature_deg": split_list[1]})
+            df.to_csv("./data_output.csv", sep=';',index=False) 
             
             # find the instane with the closest length value
             closest_index = split_list[0].index(min(split_list[0], key=lambda x:abs(x-self.length_stats[0])))
@@ -136,7 +142,7 @@ class MeasurerInstance():
                                     (15, closest_instance["images"]["processed"].shape[0]-120), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
         chosen_image = cv2.putText(chosen_image, 
-                                    "Length (m): " +  "{:.2f}".format(length_stats[0]) + \
+                                    "Length (mm): " +  "{:.2f}".format(length_stats[0]) + \
                                     " +/- " + "{:.2f}".format(length_stats[1]),
                                     (15, chosen_image.shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
@@ -196,26 +202,10 @@ class MeasurerInstance():
         end_pts = [coord for coord, dist in end_candidates]
         
         # Fill in the image matrices
-        # kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        
         longest_path_mat = np.zeros(dimensions)
         for y, x in long_zipped:
             longest_path_mat[y-1][x-1] = 1
         self.current_images["long_path"] = longest_path_mat
-
-        # end_pt_mat = np.zeros(dimensions)
-        # for y, x in end_pts:
-        #     end_pt_mat[y-1][x-1] = 1
-        # end_pt_mat = cv2.dilate(end_pt_mat, kernel, iterations=3)
-            
-        # for y, x in end_pt_coords:
-        #     end_pt_mat[y-1][x-1] = 1
-        # end_pt_mat = cv2.dilate(end_pt_mat, kernel, iterations=3)
-        
-        # temp = cv2.addWeighted((end_pt_mat * 255).astype('uint8'), 0.7, (longest_path_mat * 255).astype('uint8'), 0.3, 0)
-        # temp = cv2.resize(temp, None, fy=0.5, fx=0.5)
-        # cv2.imshow("thing", temp) 
-        # cv2.waitKey(0)
         
         # Run the intersection exercise for each end point to determine
         # how much length to add onto the ends of the longpath
@@ -297,22 +287,13 @@ class MeasurerInstance():
                                 self.current_images["long_path"][dimensions[0] - 1 - y][x] = 1
                     
         self.current_images["long_path"] = np.where(self.current_images["long_path"] > 1, 1, self.current_images["long_path"])        
-        print(slope, fil_curvature, "fil length: " + str(fil_length), "added length: " + str(added_dist))
         
         image = MeasurerInstance.ShowImage(self.current_images["processed"], (self.current_images["long_path"] * 255).astype('uint8'), name="binarized") 
         self.current_images["processed"] = image
         
         return fil_length, fil_curvature
-            
-        # Compare to current best filament
-        if not any(self.measurements):
-            return self.CompareFilamentProperties(fil_curvature, fil_length) # will create the dictionary
-        elif fil_length <= self.current_best["length"]:
-            return (False, "filament too short")
-        else:
-            return self.CompareFilamentProperties(fil_curvature, fil_length)
 
-    def ShowImage(image1, image2, resize=0.7, name='Image', pausekey=False, show=False):
+    def ShowImage(image1, image2, resize=0.5, name='Image', pausekey=False, show=False):
         image = cv2.addWeighted(image1,0.5,image2,0.5,0)
         if show:
             temp = cv2.resize(image, None, fy=resize, fx=resize)
@@ -321,15 +302,6 @@ class MeasurerInstance():
                 cv2.waitKey(0)
             
         return image
-    
-    def CompareFilamentProperties(self, fil_curvature, fil_length):
-        if fil_curvature < self.max_curvature:
-            image = MeasurerInstance.ShowImage(self.current_images["processed"], (self.current_images["long_path"] * 255).astype('uint8'), name="binarized") 
-            self.current_images["processed"] = image
-            self.current_best = {"curvature": fil_curvature, "length": fil_length, "images": self.current_images}
-            return (True, "candidate accepted")
-        else:
-            return (False, "candidate too curved")
         
         
         

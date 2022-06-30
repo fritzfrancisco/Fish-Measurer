@@ -122,7 +122,7 @@ class ConstructApp():
         w.grid(row = 1, column = 1, sticky='ew', padx=5)
         gainSetting.grid(row = 1, column = 0, sticky='w', padx=5)
         
-        ConstructApp.frameRateSetting = DigitEntry("Framerate (fps): ", 30, 3, self.inputsFrame, trace="framerate")
+        ConstructApp.frameRateSetting = DigitEntry("Framerate (fps): ", 30, 2, self.inputsFrame, trace="framerate")
 
         ## -- OUTPUT SETTINGS -----------------------------------------------------------------------------------------------
         outputFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=2, pady=10, bg="grey80")
@@ -224,6 +224,7 @@ class ConstructApp():
         innerStartFrame = tk.Frame(master=startFrame, relief='flat', borderwidth=2, padx=5)
         
         ConstructApp.thresholdSetting = DigitEntry("Threshold [0, 255]: ", 100, 0, innerStartFrame, lower=0, upper=255, trace="threshold", pack=True)
+        ConstructApp.numberFramesSetting = DigitEntry("Number of Frames: ", 3, 1, innerStartFrame, trace="numberFrames", lower=0)
 
         self.startButton = tk.Button(startFrame, text='START', command=self.StartButton, bg="red", font=("Courier", 24), fg="white", state="disabled")
         self.startButton.pack(fill=tk.BOTH, pady=5)
@@ -287,6 +288,7 @@ class ConstructApp():
         self.backgroundButton["state"] = "disabled"
         self.startButton["state"] = "disabled"
         ConstructApp.thresholdSetting.Activate(False)
+        ConstructApp.numberFramesSetting.Activate(False)
         ConstructApp.fishIDEntry["state"] = "disabled"
         ConstructApp.additionalText["state"] = "disabled"
         ConstructApp.w["state"] = "disabled"
@@ -314,6 +316,7 @@ class ConstructApp():
             self.startButton.after(1000, self.ReinstateSetting, thread, count)
         else:
             ConstructApp.thresholdSetting.Activate(True)
+            ConstructApp.numberFramesSetting.Activate(True)
             self.startButton["state"] = "normal"
             self.startButton["text"] = "START"
             self.backgroundButton["state"] = "normal"

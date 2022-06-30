@@ -30,6 +30,7 @@ class Cameras():
         
         Cameras.new_frame = False
         Cameras.framerate = 30
+        Cameras.number_of_frames = 3
         Cameras.active_measurer = None
         Cameras.lock = threading.Lock()
         
@@ -96,7 +97,7 @@ class Cameras():
             Cameras.connected = False # will automatically shut down app in constructor
     
     def TriggerSkeletonize():
-        Cameras.active_measurer.SkeletonizeFrames(Cameras.GetFixedNumFrames(3))
+        Cameras.active_measurer.SkeletonizeFrames(Cameras.GetFixedNumFrames(Cameras.number_of_frames))
     
     def SetNewFrame(frame):
         global current_frame

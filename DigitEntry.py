@@ -49,8 +49,10 @@ class DigitEntry():
                 elif self.trace == "framerate":
                     Cameras.currentCam.AcquisitionFrameRateEnable.SetValue(True)
                     Cameras.currentCam.AcquisitionFrameRate.SetValue(float(self.get()))
-                else:
+                elif self.trace == "threshold":
                     MeasurerInstance.threshold = float(self.get())
+                else:
+                    Cameras.number_of_frames = float(self.get())
     
     def ChangeValue(self, newVal):
         self.set(newVal)
