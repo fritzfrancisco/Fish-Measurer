@@ -15,7 +15,7 @@ class ConstructApp():
     def __init__(self, **kwargs):
         # Create the app
         rootWindow = tk.Tk()
-        rootWindow.geometry("1422x800")
+        rootWindow.geometry("1458x820")
         rootWindow.title('Fish Measurer')
         rootWindow.columnconfigure(0)
         rootWindow.columnconfigure(1, weight=1)
@@ -102,7 +102,7 @@ class ConstructApp():
         self.inputsFrame.columnconfigure(1, weight=1)
 
         # Settings inputs
-        ConstructApp.exposureSetting = DigitEntry("Exposure (ms): ", 100, 0, self.inputsFrame, trace="exposure")
+        ConstructApp.exposureSetting = DigitEntry("Exposure (ms): ", 1500, 0, self.inputsFrame, trace="exposure")
         
         def SendGain(selection):
             ## error handling for failure? Tkinter pop-up
@@ -300,20 +300,16 @@ class ConstructApp():
         skeletonThread = threading.Thread(target=Cameras.TriggerSkeletonize, daemon=True)
         skeletonThread.start()
     
-        self.startButton.after(1000, self.ReinstateSetting, skeletonThread, 0)
+        self.startButton.after(1000, self.ReinstateSetting, skeletonThread)
     
-    def ReinstateSetting(self, thread, count):
+    def ReinstateSetting(self, thread):
         if thread.is_alive():
-            count+=1
-            if count == 1:
-                self.startButton["text"] = "."
-            elif count == 2:
-                self.startButton["text"] = ".."
-            elif count == 3:
-                self.startButton["text"] = "..."
-                count = 0
+            if MeasurerInstance.processingFrame is None:
+                self.startButton["text"] = "COLLECTING..."
+            else:
+                self.startButton["text"] = "FRAME " + str(MeasurerInstance.processingFrame + 1) + "/" + str(int(Cameras.number_of_frames))
             
-            self.startButton.after(1000, self.ReinstateSetting, thread, count)
+            self.startButton.after(1000, self.ReinstateSetting, thread)
         else:
             ConstructApp.thresholdSetting.Activate(True)
             ConstructApp.numberFramesSetting.Activate(True)

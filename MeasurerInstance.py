@@ -22,6 +22,7 @@ class MeasurerInstance():
         MeasurerInstance.threshold = None 
         MeasurerInstance.fishID = None
         MeasurerInstance.addText = None
+        MeasurerInstance.processingFrame = None
 
         self.max_curvature = math.pi / 180 * max_curvature
         self.min_skel_size = MeasurerInstance.ConvertLengthToPixels(min_skel_size)
@@ -53,8 +54,13 @@ class MeasurerInstance():
         self.current_images = {}
         
         (raw, binarized) = frames
+        frames_path = os.path.join(self.outputFolder, "frames")
+        if not os.path.isdir(frames_path):
+            os.mkdir(frames_path)
         
         for i in range(len(raw)):
+            MeasurerInstance.processingFrame = i
+            
             # Apply morphological operations (image processing)
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
             
@@ -97,12 +103,15 @@ class MeasurerInstance():
             # fil_length = MeasurerInstance.ConvertPixelsToLength(fil_length)
             print("frame: " + str(i), "fil length: " + str(fil_length), "curvature: " + str(curvature))
             
-            state = cv2.imwrite(os.path.join(self.outputFolder, str(i) + str(self.format)), self.current_images["processed"])
+            extended_frames_path = os.path.join(frames_path, str(i) + str(self.format))
+            state = cv2.imwrite(extended_frames_path, self.current_images["processed"])
             
             # Save the data from the frame
             self.filament_lengths.append((i, fil_length))
             self.measurements[i] = {"length": fil_length, "curvature": curvature, "images": self.current_images}
 
+        MeasurerInstance.processingFrame = None
+        
         # Remove outliers
         if self.filament_lengths:
             self.length_avg = statistics.mean([lens for i, lens in self.filament_lengths])
@@ -113,7 +122,7 @@ class MeasurerInstance():
             self.curve_stats = (statistics.mean(split_list[1]), statistics.stdev(split_list[1])) 
             
             df = pd.DataFrame(data={"frame_number": split_list[2], "length_mm": split_list[0], "curvature_deg": split_list[1]})
-            df.to_csv("./data_output.csv", sep=';',index=False) 
+            df.to_csv(os.path.join(self.outputFolder, "data_output.csv"), sep=';',index=False) 
             
             # find the instane with the closest length value
             closest_index = split_list[0].index(min(split_list[0], key=lambda x:abs(x-self.length_stats[0])))

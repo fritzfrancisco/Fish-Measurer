@@ -1,5 +1,12 @@
 from tkinter import *
+
+import pypylon
+import pathlib
 from pypylon import pylon
+from pypylon import genicam
+from pypylon import _genicam
+from pypylon import _pylon
+
 from datetime import datetime, time
 from PIL import Image, ImageTk
 import cv2
@@ -33,6 +40,7 @@ class Cameras():
         Cameras.number_of_frames = 3
         Cameras.active_measurer = None
         Cameras.lock = threading.Lock()
+        Cameras.skeletonThread = None
         
         # Get the available cameras
         tlFactory = pylon.TlFactory.GetInstance()
