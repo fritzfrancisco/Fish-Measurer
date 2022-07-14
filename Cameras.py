@@ -40,7 +40,6 @@ class Cameras():
         Cameras.number_of_frames = 3
         Cameras.active_measurer = None
         Cameras.lock = threading.Lock()
-        Cameras.skeletonThread = None
         
         # Get the available cameras
         tlFactory = pylon.TlFactory.GetInstance()

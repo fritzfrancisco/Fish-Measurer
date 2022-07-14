@@ -102,7 +102,7 @@ class ConstructApp():
         self.inputsFrame.columnconfigure(1, weight=1)
 
         # Settings inputs
-        ConstructApp.exposureSetting = DigitEntry("Exposure (ms): ", 1500, 0, self.inputsFrame, trace="exposure")
+        ConstructApp.exposureSetting = DigitEntry("Exposure (ms): ", 100, 0, self.inputsFrame, trace="exposure")
         
         def SendGain(selection):
             ## error handling for failure? Tkinter pop-up
@@ -214,7 +214,7 @@ class ConstructApp():
         backgroundFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=10, pady=10, bg="grey80")
         backgroundFrame.pack(fill=tk.BOTH)
         
-        self.backgroundButton = tk.Button(backgroundFrame, text='TRAIN', command=self.BackgroundButton, bg="DarkSeaGreen", font=("Courier", 24), fg="white")
+        self.backgroundButton = tk.Button(backgroundFrame, text='TRAIN', command=self.BackgroundButton, bg="#74B224", font=("Courier", 24), fg="white")
         self.backgroundButton.pack(fill=tk.BOTH)
 
         ## -- START BUTTON -----------------------------------------------------------------------------------
@@ -226,7 +226,7 @@ class ConstructApp():
         ConstructApp.thresholdSetting = DigitEntry("Threshold [0, 255]: ", 100, 0, innerStartFrame, lower=0, upper=255, trace="threshold", pack=True)
         ConstructApp.numberFramesSetting = DigitEntry("Number of Frames: ", 3, 1, innerStartFrame, trace="numberFrames", lower=0)
 
-        self.startButton = tk.Button(startFrame, text='START', command=self.StartButton, bg="red", font=("Courier", 24), fg="white", state="disabled")
+        self.startButton = tk.Button(startFrame, text='START', command=self.StartButton, bg="grey50", font=("Courier", 24), fg="white", state="disabled")
         self.startButton.pack(fill=tk.BOTH, pady=5)
         
         paneeli_image.after(15, UpdateFeed)
@@ -237,9 +237,9 @@ class ConstructApp():
 
         if not thread.is_alive():
             self.backgroundButton["text"] = "RESTART"
-            self.backgroundButton.configure(bg = "red")
+            self.backgroundButton.configure(bg = "#185CA8")
             self.backgroundButton["state"] = "normal"
-            self.startButton.configure(bg = "DarkSeaGreen")
+            self.startButton.configure(bg = "#74B224")
             self.startButton["state"] = "normal"
         else:
             if (isinstance(label, int) or isinstance(label, float)) and label != 0:
@@ -274,8 +274,8 @@ class ConstructApp():
         elif self.backgroundButton["text"] == "RESTART":
             # Reconfigure buttons and delete the previous instance
             self.backgroundButton["text"] = "TRAIN"
-            self.backgroundButton.configure(bg = "DarkSeaGreen")
-            self.startButton.configure(bg = "red")
+            self.backgroundButton.configure(bg = "#74B224")
+            self.startButton.configure(bg = "grey50")
             self.startButton["state"] = "disabled"
             
             # Unlock settings

@@ -30,14 +30,21 @@ class MeasurerInstance():
         Cameras.ConnectMeasurer(self)
         
     def ConvertPixelsToLength(pixels):
-        return pixels * (4.4 * 10.0) / 355.6247404241471
+        return (pixels + 12.169) / 10.783
 
     def ConvertLengthToPixels(length):
-        return length / (4.4 * 10.0) * 355.6247404241471
+        return 10.783 * length - 12.169
 
     def ProcessImage(self, frame):
         fgmask = self.fgbg.apply(frame, learningRate=0)
-        self.im_bw = cv2.threshold(fgmask, MeasurerInstance.threshold, 255, cv2.THRESH_BINARY)[1]
+        fully_binarized = cv2.threshold(fgmask, MeasurerInstance.threshold, 255, cv2.THRESH_BINARY)[1]
+        
+        # Fill all contours and only show contour with largest area
+        contour, hier = cv2.findContours(fully_binarized,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+        biggestContour = max(contour, key = cv2.contourArea)
+        
+        self.im_bw = np.zeros(np.shape(fully_binarized)).astype('uint8')
+        cv2.drawContours(self.im_bw, [biggestContour],-1,255,thickness=cv2.FILLED)
         
         return self.im_bw
         
@@ -64,16 +71,11 @@ class MeasurerInstance():
             # Apply morphological operations (image processing)
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
             
-            # Fill all contours
-            des = binarized[i]
-            contour, hier = cv2.findContours(des,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-            for cnt in contour:
-                cv2.drawContours(des,[cnt],-1,255,thickness=cv2.FILLED)
-            
-            opening = cv2.morphologyEx(des, cv2.MORPH_OPEN, kernel)
+            opening = cv2.morphologyEx(binarized[i], cv2.MORPH_OPEN, kernel)
             self.gradient = cv2.morphologyEx(opening, cv2.MORPH_GRADIENT, kernel) 
-            self.processed_image = cv2.addWeighted(cv2.cvtColor(raw[i], cv2.COLOR_BGR2GRAY),0.7,opening,0.3,0)
-            self.processed_image = cv2.addWeighted(self.gradient,0.2,self.processed_image,0.8,0)
+            
+            self.gradientOpen = cv2.addWeighted(opening,0.5,self.gradient,0.5,0)
+            self.processed_image = raw[i]
             
             # skeleton = cv2.ximgproc.thinning(opening)
             skeleton = skeletonize(np.round_((opening / 255).astype('uint8')))
@@ -83,7 +85,11 @@ class MeasurerInstance():
             fil.medskel(verbose=False)
             
             # Skeletons must be at least 50 pixels long to count
-            fil.analyze_skeletons(skel_thresh=self.min_skel_size*u.pix)
+            try:
+                fil.analyze_skeletons(skel_thresh=self.min_skel_size*u.pix)
+            except ValueError:
+                print("Filfinder error")
+                continue
             
             # Attempt to grab the relevant filament
             filament = None
@@ -100,7 +106,7 @@ class MeasurerInstance():
                 
             self.current_images = {"processed": self.processed_image, "contour": self.gradient, "threshed": opening, "raw": cv2.cvtColor(raw[i], cv2.COLOR_BGR2GRAY)}
             fil_length, curvature = self.AssessFilament(filament)
-            # fil_length = MeasurerInstance.ConvertPixelsToLength(fil_length)
+            fil_length = MeasurerInstance.ConvertPixelsToLength(fil_length)
             print("frame: " + str(i), "fil length: " + str(fil_length), "curvature: " + str(curvature))
             
             extended_frames_path = os.path.join(frames_path, str(i) + str(self.format))
@@ -121,15 +127,16 @@ class MeasurerInstance():
             self.length_stats = (statistics.mean(split_list[0]), statistics.stdev(split_list[0]))
             self.curve_stats = (statistics.mean(split_list[1]), statistics.stdev(split_list[1])) 
             
-            df = pd.DataFrame(data={"frame_number": split_list[2], "length_mm": split_list[0], "curvature_deg": split_list[1]})
+            df = pd.DataFrame(data={"frame_number": split_list[2], "length_mm": split_list[0], "curvature_rad": split_list[1]})
             df.to_csv(os.path.join(self.outputFolder, "data_output.csv"), sep=';',index=False) 
             
             # find the instane with the closest length value
             closest_index = split_list[0].index(min(split_list[0], key=lambda x:abs(x-self.length_stats[0])))
             closest_instance = self.measurements[split_list[2][closest_index]]
+            closest_length = self.measurements[closest_index]["length"]
             
             print("\nFinal: " + str(self.curve_stats[0]) + "; " + str(self.length_stats[0]) + "; " + str(closest_index))
-            chosen_image = MeasurerInstance.WatermarkImage(closest_instance, self.length_stats, self.curve_stats)
+            chosen_image = MeasurerInstance.WatermarkImage(closest_instance, closest_index, closest_length, self.length_stats, self.curve_stats)
             
             # Save it and open it
             if MeasurerInstance.fishID != None and MeasurerInstance.fishID != '':
@@ -143,16 +150,22 @@ class MeasurerInstance():
             # could not read anything
         ## IF STATE ERROR MESSAGE
                 
-    def WatermarkImage(closest_instance, length_stats, curve_stats):
+    def WatermarkImage(closest_instance, closest_index, closest_length, length_stats, curve_stats):
         # Watermark the results
         chosen_image = cv2.putText(closest_instance["images"]["processed"], 
-                                    "Curvature (deg): " + "{:.2f}".format(curve_stats[0] * 180 / math.pi) + \
+                                    "Avg. Curvature (deg): " + "{:.2f}".format(curve_stats[0] * 180 / math.pi) + \
                                     " +/- " + "{:.2f}".format(curve_stats[1] * 180 / math.pi),
-                                    (15, closest_instance["images"]["processed"].shape[0]-120), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
+                                    (15, closest_instance["images"]["processed"].shape[0]-210), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
         chosen_image = cv2.putText(chosen_image, 
-                                    "Length (mm): " +  "{:.2f}".format(length_stats[0]) + \
-                                    " +/- " + "{:.2f}".format(length_stats[1]),
+                                    "Avg. Length: " +  "{:.2f}".format(length_stats[0]) + "mm (" + \
+                                    "{:.2f}".format(MeasurerInstance.ConvertLengthToPixels(length_stats[0])) + "pix)" + \
+                                    " +/- " + "{:.2f}".format(length_stats[1]) + "mm", (15, chosen_image.shape[0]-120), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
+        
+        chosen_image = cv2.putText(chosen_image, 
+                                    "Frame: " +  "{0}".format(closest_index) + \
+                                    "; Length: " + "{:.2f}".format(closest_length) + \
+                                    "mm (" + "{:.2f}".format(MeasurerInstance.ConvertLengthToPixels(closest_length)) + "pix)",
                                     (15, chosen_image.shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
         # Add metadata
@@ -171,7 +184,7 @@ class MeasurerInstance():
         return chosen_image
     
     def AssessFilament(self, filament):
-        dimensions = np.shape(self.current_images["processed"])
+        dimensions = np.shape(self.current_images["contour"])
         
         fil_length = filament.length(u.pix).value
         added_dist = 0
@@ -297,13 +310,14 @@ class MeasurerInstance():
                     
         self.current_images["long_path"] = np.where(self.current_images["long_path"] > 1, 1, self.current_images["long_path"])        
         
-        image = MeasurerInstance.ShowImage(self.current_images["processed"], (self.current_images["long_path"] * 255).astype('uint8'), name="binarized") 
+        longOpenGradient = cv2.addWeighted((self.current_images["long_path"] * 255).astype('uint8'),0.6,self.gradientOpen,0.4,0)
+        image = MeasurerInstance.ShowImage(self.current_images["processed"], cv2.cvtColor(longOpenGradient, cv2.COLOR_GRAY2RGB), name="binarized") 
         self.current_images["processed"] = image
         
         return fil_length, fil_curvature
 
     def ShowImage(image1, image2, resize=0.5, name='Image', pausekey=False, show=False):
-        image = cv2.addWeighted(image1,0.5,image2,0.5,0)
+        image = cv2.addWeighted(image1,0.65,image2,0.35,0)
         if show:
             temp = cv2.resize(image, None, fy=resize, fx=resize)
             cv2.imshow(name, temp) 
