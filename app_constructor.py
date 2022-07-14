@@ -15,7 +15,7 @@ class ConstructApp():
     def __init__(self, **kwargs):
         # Create the app
         rootWindow = tk.Tk()
-        rootWindow.geometry("1458x820")
+        rootWindow.geometry("1133x820")
         rootWindow.title('Fish Measurer')
         rootWindow.columnconfigure(0)
         rootWindow.columnconfigure(1, weight=1)
