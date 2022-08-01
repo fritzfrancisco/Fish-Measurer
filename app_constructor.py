@@ -229,7 +229,13 @@ class ConstructApp():
         self.startButton = tk.Button(startFrame, text='START', command=self.StartButton, bg="grey50", font=("Courier", 24), fg="white", state="disabled")
         self.startButton.pack(fill=tk.BOTH, pady=5)
         
-        paneeli_image.after(15, UpdateFeed)
+        paneeli_image.after(15, UpdateFeed) 
+        
+        def on_closing():
+            sys.stdout.close()
+            rootWindow.destroy()
+
+        rootWindow.protocol("WM_DELETE_WINDOW", on_closing)
         rootWindow.mainloop()
     
     def ButtonTextCountDown(self, label, thread):
@@ -263,6 +269,17 @@ class ConstructApp():
             
             self.measurer = MeasurerInstance(ConstructApp.folder_path.get(), ConstructApp.outputFormatVariable.get())
             
+            def ErrorCheckLoop():
+                state, message = MeasurerInstance.error
+                if (state):
+                    tk.messagebox.showerror("Error", message)
+                    self.backgroundButton.after(10000, ErrorCheckLoop)
+                    
+                else:
+                    self.backgroundButton.after(1000, ErrorCheckLoop)
+                    
+            self.backgroundButton.after(15, ErrorCheckLoop)
+                    
             # Thread the Tkinter button countdown
             # x = threading.Thread(target=ConstructApp.ButtonTextCountDown, args=(self.backgroundButton, 10,), daemon=True)
             # x.start()
@@ -320,4 +337,6 @@ class ConstructApp():
             ConstructApp.additionalText["state"] = "normal"
             ConstructApp.w["state"] = "normal"
             ConstructApp.button["state"] = "normal"
+            
+
             

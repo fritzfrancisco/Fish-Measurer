@@ -23,6 +23,7 @@ class MeasurerInstance():
         MeasurerInstance.fishID = None
         MeasurerInstance.addText = None
         MeasurerInstance.processingFrame = None
+        MeasurerInstance.error = (False, None)
 
         self.max_curvature = math.pi / 180 * max_curvature
         self.min_skel_size = MeasurerInstance.ConvertLengthToPixels(min_skel_size)
@@ -30,22 +31,31 @@ class MeasurerInstance():
         Cameras.ConnectMeasurer(self)
         
     def ConvertPixelsToLength(pixels):
-        return (pixels + 12.169) / 10.783
+        return 0.098*pixels + 1.6049
 
     def ConvertLengthToPixels(length):
-        return 10.783 * length - 12.169
+        return (length - 1.6049) / 0.098
 
     def ProcessImage(self, frame):
         fgmask = self.fgbg.apply(frame, learningRate=0)
         fully_binarized = cv2.threshold(fgmask, MeasurerInstance.threshold, 255, cv2.THRESH_BINARY)[1]
         
         # Fill all contours and only show contour with largest area
-        contour, hier = cv2.findContours(fully_binarized,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-        biggestContour = max(contour, key = cv2.contourArea)
-        
-        self.im_bw = np.zeros(np.shape(fully_binarized)).astype('uint8')
-        cv2.drawContours(self.im_bw, [biggestContour],-1,255,thickness=cv2.FILLED)
-        
+        try:
+            contour, hier = cv2.findContours(fully_binarized,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+            biggestContour = max(contour, key = cv2.contourArea)
+            
+            self.im_bw = np.zeros(np.shape(fully_binarized)).astype('uint8')
+            cv2.drawContours(self.im_bw, [biggestContour],-1,255,thickness=cv2.FILLED)
+            
+            if (MeasurerInstance.error[1] == "The threshold value is set too high and all blobs are being filtered out. Please lower it a bit"):
+                MeasurerInstance.error = (False, None)
+                
+        except ValueError as e:
+            print(str(type(e).__name__) + ": The biggestContour list is empty, no blobs are being picked up -->", e)
+            self.im_bw = fully_binarized
+            MeasurerInstance.error = (True, "The threshold value is set too high and all blobs are being filtered out. Please lower it a bit")
+            
         return self.im_bw
         
     def TrainBackground(self):
@@ -121,22 +131,26 @@ class MeasurerInstance():
         # Remove outliers
         if self.filament_lengths:
             self.length_avg = statistics.mean([lens for i, lens in self.filament_lengths])
-            refined_list = [(fil_length, self.measurements[i]["curvature"], i) for i, fil_length in self.filament_lengths if abs((fil_length - self.length_avg) / self.length_avg) <= 0.1]
+            refined_list = [(fil_length, self.measurements[i], i) for i, fil_length in self.filament_lengths if abs((fil_length - self.length_avg) / self.length_avg) <= 0.1]
             split_list = [list(t) for t in zip(*refined_list)]
             
             self.length_stats = (statistics.mean(split_list[0]), statistics.stdev(split_list[0]))
-            self.curve_stats = (statistics.mean(split_list[1]), statistics.stdev(split_list[1])) 
+            self.curve_stats = (statistics.mean([split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])]), statistics.stdev([split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])])) 
             
-            df = pd.DataFrame(data={"frame_number": split_list[2], "length_mm": split_list[0], "curvature_rad": split_list[1]})
+            df = pd.DataFrame(data={"frame_number": split_list[2], "length_mm": split_list[0], "curvature_rad": [split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])]})
             df.to_csv(os.path.join(self.outputFolder, "data_output.csv"), sep=';',index=False) 
             
-            # find the instane with the closest length value
-            closest_index = split_list[0].index(min(split_list[0], key=lambda x:abs(x-self.length_stats[0])))
-            closest_instance = self.measurements[split_list[2][closest_index]]
-            closest_length = self.measurements[closest_index]["length"]
+            # find the instance with the closest length value
+            try:
+                local_index = split_list[0].index(min(split_list[0], key=lambda x:abs(x-self.length_stats[0])))
+                
+                closest_instance = split_list[1][local_index]
+                closest_index = split_list[2][local_index]
+            except (KeyError):
+                MeasurerInstance.error = (True, "There was an error processing the obtained data. The data wsa not saved, please try again")
             
             print("\nFinal: " + str(self.curve_stats[0]) + "; " + str(self.length_stats[0]) + "; " + str(closest_index))
-            chosen_image = MeasurerInstance.WatermarkImage(closest_instance, closest_index, closest_length, self.length_stats, self.curve_stats)
+            chosen_image = MeasurerInstance.WatermarkImage(closest_instance, closest_index, self.length_stats, self.curve_stats)
             
             # Save it and open it
             if MeasurerInstance.fishID != None and MeasurerInstance.fishID != '':
@@ -146,27 +160,25 @@ class MeasurerInstance():
                 state = cv2.imwrite(os.path.join(self.outputFolder, str(datetime.now().strftime("%d-%m-%Y_%H-%M-%S")) + \
                     str(self.format)), chosen_image)
         else:
-            print("could not get lengths")
-            # could not read anything
-        ## IF STATE ERROR MESSAGE
+            MeasurerInstance.error = (True, "The length values could not be obtained from the image. Either the blob was too small and filtered out, or the skeletonization process was too complex. Please try again")
                 
-    def WatermarkImage(closest_instance, closest_index, closest_length, length_stats, curve_stats):
+    def WatermarkImage(closest_instance, closest_index, length_stats, curve_stats):
         # Watermark the results
         chosen_image = cv2.putText(closest_instance["images"]["processed"], 
-                                    "Avg. Curvature (deg): " + "{:.2f}".format(curve_stats[0] * 180 / math.pi) + \
+                                    "Curvature (deg): " + "{:.2f}".format(curve_stats[0] * 180 / math.pi) + \
                                     " +/- " + "{:.2f}".format(curve_stats[1] * 180 / math.pi),
-                                    (15, closest_instance["images"]["processed"].shape[0]-210), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
+                                    (15, closest_instance["images"]["processed"].shape[0]-120), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
         chosen_image = cv2.putText(chosen_image, 
-                                    "Avg. Length: " +  "{:.2f}".format(length_stats[0]) + "mm (" + \
-                                    "{:.2f}".format(MeasurerInstance.ConvertLengthToPixels(length_stats[0])) + "pix)" + \
-                                    " +/- " + "{:.2f}".format(length_stats[1]) + "mm", (15, chosen_image.shape[0]-120), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
+                                    "Length: " +  "{:.2f}".format(length_stats[0]) + "mm (" + \
+                                    "{:.2f}".format(closest_instance["length"]) + "mm)" + \
+                                    " +/- " + "{:.2f}".format(length_stats[1]) + "mm", (15, chosen_image.shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
-        chosen_image = cv2.putText(chosen_image, 
-                                    "Frame: " +  "{0}".format(closest_index) + \
-                                    "; Length: " + "{:.2f}".format(closest_length) + \
-                                    "mm (" + "{:.2f}".format(MeasurerInstance.ConvertLengthToPixels(closest_length)) + "pix)",
-                                    (15, chosen_image.shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
+        # chosen_image = cv2.putText(chosen_image, 
+        #                             "Frame: " +  "{0}".format(closest_index) + \
+        #                             "; Length: " + "{:.2f}".format(closest_instance["length"]) + \
+        #                             "mm (" + "{:.2f}".format(MeasurerInstance.ConvertLengthToPixels(closest_instance["length"])) + "pix)",
+        #                             (15, chosen_image.shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
         # Add metadata
         chosen_image = cv2.putText(chosen_image, datetime.now().strftime("%d.%m.%Y %H:%M:%S"), (15, 70), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
