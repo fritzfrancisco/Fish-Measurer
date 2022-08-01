@@ -71,7 +71,20 @@ class MeasurerInstance():
         self.current_images = {}
         
         (raw, binarized) = frames
-        frames_path = os.path.join(self.outputFolder, "frames")
+        
+        # Create the destination folder
+        target_folder_name = None
+        if MeasurerInstance.fishID != None and MeasurerInstance.fishID != '':
+            target_folder_name = os.path.join(self.outputFolder, str(datetime.now().strftime("%d-%m-%Y_%H-%M-%S")) + \
+                "_ID-" + str(MeasurerInstance.fishID))
+        else:
+            target_folder_name = os.path.join(self.outputFolder, str(datetime.now().strftime("%d-%m-%Y_%H-%M-%S")))
+        
+        if not os.path.isdir(target_folder_name):
+            os.mkdir(target_folder_name)
+
+        # Create the folder for the individual frames
+        frames_path = os.path.join(target_folder_name, "frames")
         if not os.path.isdir(frames_path):
             os.mkdir(frames_path)
         
@@ -132,13 +145,14 @@ class MeasurerInstance():
         if self.filament_lengths:
             self.length_avg = statistics.mean([lens for i, lens in self.filament_lengths])
             refined_list = [(fil_length, self.measurements[i], i) for i, fil_length in self.filament_lengths if abs((fil_length - self.length_avg) / self.length_avg) <= 0.1]
+            MeasurerInstance.trial_count = len(refined_list)
             split_list = [list(t) for t in zip(*refined_list)]
             
             self.length_stats = (statistics.mean(split_list[0]), statistics.stdev(split_list[0]))
             self.curve_stats = (statistics.mean([split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])]), statistics.stdev([split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])])) 
             
             df = pd.DataFrame(data={"frame_number": split_list[2], "length_mm": split_list[0], "curvature_rad": [split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])]})
-            df.to_csv(os.path.join(self.outputFolder, "data_output.csv"), sep=';',index=False) 
+            df.to_csv(os.path.join(target_folder_name, "data-output.csv"), sep=';',index=False) 
             
             # find the instance with the closest length value
             try:
@@ -153,12 +167,7 @@ class MeasurerInstance():
             chosen_image = MeasurerInstance.WatermarkImage(closest_instance, closest_index, self.length_stats, self.curve_stats)
             
             # Save it and open it
-            if MeasurerInstance.fishID != None and MeasurerInstance.fishID != '':
-                state = cv2.imwrite(os.path.join(self.outputFolder, str(datetime.now().strftime("%d-%m-%Y_%H-%M-%S")) + \
-                    "_" + str(MeasurerInstance.fishID) + str(self.format)), chosen_image)
-            else:
-                state = cv2.imwrite(os.path.join(self.outputFolder, str(datetime.now().strftime("%d-%m-%Y_%H-%M-%S")) + \
-                    str(self.format)), chosen_image)
+            state = cv2.imwrite(os.path.join(target_folder_name, "closest-image" + str(self.format)), chosen_image)
         else:
             MeasurerInstance.error = (True, "The length values could not be obtained from the image. Either the blob was too small and filtered out, or the skeletonization process was too complex. Please try again")
                 
@@ -174,11 +183,9 @@ class MeasurerInstance():
                                     "{:.2f}".format(closest_instance["length"]) + "mm)" + \
                                     " +/- " + "{:.2f}".format(length_stats[1]) + "mm", (15, chosen_image.shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
-        # chosen_image = cv2.putText(chosen_image, 
-        #                             "Frame: " +  "{0}".format(closest_index) + \
-        #                             "; Length: " + "{:.2f}".format(closest_instance["length"]) + \
-        #                             "mm (" + "{:.2f}".format(MeasurerInstance.ConvertLengthToPixels(closest_instance["length"])) + "pix)",
-        #                             (15, chosen_image.shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
+        chosen_image = cv2.putText(chosen_image, 
+                                    "{0}".format(MeasurerInstance.trial_count) +  " images",
+                                    (15, chosen_image.shape[0]-210), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
         # Add metadata
         chosen_image = cv2.putText(chosen_image, datetime.now().strftime("%d.%m.%Y %H:%M:%S"), (15, 70), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)

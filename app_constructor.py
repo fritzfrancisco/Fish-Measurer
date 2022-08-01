@@ -7,7 +7,6 @@ from DigitEntry import DigitEntry
 from MeasurerInstance import MeasurerInstance
 from Cameras import Cameras
 import math
-import time
 import sys
 import threading
 
@@ -15,7 +14,7 @@ class ConstructApp():
     def __init__(self, **kwargs):
         # Create the app
         rootWindow = tk.Tk()
-        rootWindow.geometry("1133x820")
+        rootWindow.geometry("1133x840")
         rootWindow.title('Fish Measurer')
         rootWindow.columnconfigure(0)
         rootWindow.columnconfigure(1, weight=1)
@@ -108,6 +107,7 @@ class ConstructApp():
             ## error handling for failure? Tkinter pop-up
             Cameras.currentCam.GainAuto.SetValue(selection)
 
+        ## Gain parameter
         gainSetting = tk.Label(text="Gain Setting: ", master=self.inputsFrame)
         GAINOPTIONS = [
         "Once",
@@ -122,7 +122,26 @@ class ConstructApp():
         w.grid(row = 1, column = 1, sticky='ew', padx=5)
         gainSetting.grid(row = 1, column = 0, sticky='w', padx=5)
         
-        ConstructApp.frameRateSetting = DigitEntry("Framerate (fps): ", 30, 2, self.inputsFrame, trace="framerate")
+        ## Gain parameter
+        def SendWB(selection):
+            ## error handling for failure? Tkinter pop-up
+            Cameras.currentCam.BalanceWhiteAuto.SetValue(selection)
+
+        white_balance_setting = tk.Label(text="White Balance: ", master=self.inputsFrame)
+        WBOPTIONS = [
+        "Once",
+        "Continuous",
+        "Off"
+        ]
+        ConstructApp.wb_variable = StringVar()
+        ConstructApp.wb_variable.set(WBOPTIONS[2]) # default value
+        SendWB(WBOPTIONS[2])
+        w = OptionMenu(self.inputsFrame, ConstructApp.wb_variable, *WBOPTIONS, command=SendWB)
+        w["highlightthickness"] = 0
+        w.grid(row = 2, column = 1, sticky='ew', padx=5)
+        white_balance_setting.grid(row = 2, column = 0, sticky='w', padx=5)
+        
+        ConstructApp.frameRateSetting = DigitEntry("Framerate (fps): ", 30, 3, self.inputsFrame, trace="framerate")
 
         ## -- OUTPUT SETTINGS -----------------------------------------------------------------------------------------------
         outputFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=2, pady=10, bg="grey80")
