@@ -20,8 +20,7 @@ class ConstructApp():
         rootWindow.columnconfigure(1, weight=1)
         
         if not Cameras.connected:
-            tk.messagebox.showerror("Camera Connection Error", "The app cannot find a camera connected to this device or \
-                could not connect to the selected camera. Please verify the device connection and try again.")
+            tk.messagebox.showerror("Camera Connection Error", "The app cannot find a camera connected to this device or could not connect to the selected camera (check that the USB cable/port is 3.0 compatible). Please verify the device connection and try again.")
             sys.exit()
             
         settingsFrame = tk.Frame(relief='flat')
@@ -42,6 +41,10 @@ class ConstructApp():
             # Update the measurer
             MeasurerInstance.fishID = fishID
             MeasurerInstance.addText = addText
+            
+            if not Cameras.connected:
+                tk.messagebox.showerror("Camera Connection Error", "The app cannot find a camera connected to this device. Please verify the connection and try again.")
+                sys.exit()
             
             # Fish for the new image
             newImage = Cameras.UpdateCamera(fishID=fishID, addText=addText)
@@ -81,16 +84,18 @@ class ConstructApp():
         camsDict = {}
         CAMOPTIONS = []
         for i, cam in enumerate(Cameras.cameras):
-            CAMOPTIONS.append(str(cam.GetDeviceInfo().GetModelName()))
+            CAMOPTIONS.append(str(i+1) + ": " + str(cam.GetDeviceInfo().GetModelName()) + "; S/N: " + str(cam.GetDeviceInfo().GetSerialNumber()))
             camsDict[i] = cam
+        
+        def SendCamChange(selection):
+            Cameras.ChangeCamera(camsDict[int(selection[0])-1])
 
         camSelectVariable = StringVar()
         camSelectVariable.set(CAMOPTIONS[0]) # default value
-        camSelectVariable.trace_add('write', lambda *args, newCam = camsDict[CAMOPTIONS.index(camSelectVariable.get())]: Cameras.ChangeCamera)
-        w = OptionMenu(dropdownFrame, camSelectVariable, *CAMOPTIONS)
-        w["highlightthickness"] = 0
-        w.pack(fill=tk.X)
-
+        self.cam_choice_dropdown = OptionMenu(dropdownFrame, camSelectVariable, *CAMOPTIONS, command=SendCamChange)
+        self.cam_choice_dropdown["highlightthickness"] = 0
+        self.cam_choice_dropdown.pack(fill=tk.X)
+        
         # Camera settings
         cameraSettingsFrame = tk.Frame(master=cameraFrame, relief='flat', borderwidth=2, padx=5, pady=5, bg="grey60")
         cameraSettingsFrame.pack(fill=tk.X)
@@ -275,10 +280,12 @@ class ConstructApp():
     def BackgroundButtonsActive(self, status):
         if status:
             self.backgroundButton["state"] = "normal"
+            self.cam_choice_dropdown["state"] = "normal"
             for child in self.inputsFrame.winfo_children():
                 child.configure(state='normal')
         else:
             self.backgroundButton["state"] = "disabled"
+            self.cam_choice_dropdown["state"] = "disabled"
             for child in self.inputsFrame.winfo_children():
                 child.configure(state='disable')
             

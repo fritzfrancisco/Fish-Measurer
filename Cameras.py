@@ -12,7 +12,6 @@ from PIL import Image, ImageTk
 import cv2
 import time
 import threading
-import numpy as np
 
 class Cameras():
     currentCam = None
@@ -48,13 +47,16 @@ class Cameras():
             Cameras.connected = False # will automatically shut down app in constructor
         else:
             ## Create and attach all Pylon Devices.
-            Cameras.cameras = pylon.InstantCameraArray(len(devices))
-            for i, cam in enumerate(Cameras.cameras):
-                cam.Attach(tlFactory.CreateDevice(devices[i]))
-                
-            Cameras.currentCam = Cameras.cameras[0]
-            Cameras.connected = True
-            Cameras.StartGrabbing()
+            try:
+                Cameras.cameras = pylon.InstantCameraArray(len(devices))
+                for i, cam in enumerate(Cameras.cameras):
+                    cam.Attach(tlFactory.CreateDevice(devices[i]))
+                    
+                Cameras.currentCam = Cameras.cameras[0]
+                Cameras.connected = True
+                Cameras.StartGrabbing()
+            except:
+                Cameras.connected = False
         
     def ConnectMeasurer(measurer):
         Cameras.active_measurer = measurer
@@ -83,21 +85,28 @@ class Cameras():
     
     def GrabLoop():
         while Cameras.currentCam.IsGrabbing():
-            grabResult = Cameras.currentCam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-            
+            try:
+                grabResult = Cameras.currentCam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+            except genicam.GenericException as e:
+                if ("Device has been removed from the PC" in str(e) or "No grab result data is referenced" in str(e)):
+                    print(str(e))
+                    state = Cameras.StopGrabbing()
+                    Cameras.connected = False
+                    
             # Image grabbed successfully?
-            if grabResult.GrabSucceeded():
-                image = Cameras.converter.Convert(grabResult)
-                img = image.GetArray()
-                frame=cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
-                grabResult.Release()
-                
-                Cameras.SetNewFrame(frame)
+            if grabResult is not None:
+                if grabResult.GrabSucceeded():
+                    image = Cameras.converter.Convert(grabResult)
+                    img = image.GetArray()
+                    frame=cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
+                    grabResult.Release()
+                    
+                    Cameras.SetNewFrame(frame)
         
-    def ChangeCamera(newCamera):
+    def ChangeCamera(newCam):
         state = Cameras.StopGrabbing()
         if state:
-            Cameras.currentCam = newCamera
+            Cameras.currentCam = newCam
             Cameras.StartGrabbing()
         else:
             print("ERROR")
