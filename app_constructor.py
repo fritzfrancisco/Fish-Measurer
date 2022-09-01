@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import *
 from tkinter import filedialog
 import os
-from datetime import datetime, time
 from DigitEntry import DigitEntry
 from MeasurerInstance import MeasurerInstance
 from Cameras import Cameras
@@ -14,7 +13,7 @@ class ConstructApp():
     def __init__(self, **kwargs):
         # Create the app
         rootWindow = tk.Tk()
-        rootWindow.geometry("1133x840")
+        rootWindow.geometry("1133x850")
         rootWindow.title('Fish Measurer')
         rootWindow.columnconfigure(0)
         rootWindow.columnconfigure(1, weight=1)
@@ -176,8 +175,9 @@ class ConstructApp():
 
         def BrowseButton():
             folderName = filedialog.askdirectory()
-            ConstructApp.folder_path.set(folderName)
-            print(folderName)
+            if folderName:
+                ConstructApp.folder_path.set(folderName)
+                print(folderName)
             
         ConstructApp.button = tk.Button(browseFrame, text='Browse...', command=BrowseButton)
         ConstructApp.button.grid(row=0, column=0, sticky="nsew")
@@ -246,10 +246,34 @@ class ConstructApp():
         startFrame.pack(fill=tk.BOTH, padx=5)
         
         innerStartFrame = tk.Frame(master=startFrame, relief='flat', borderwidth=2, padx=5)
+        innerStartFrame.pack(fill=tk.X)
+        innerStartFrame.columnconfigure(0)
+        innerStartFrame.columnconfigure(1, weight=1)
         
-        ConstructApp.thresholdSetting = DigitEntry("Threshold [0, 255]: ", 100, 0, innerStartFrame, lower=0, upper=255, trace="threshold", pack=True)
-        ConstructApp.numberFramesSetting = DigitEntry("Number of Frames: ", 3, 1, innerStartFrame, trace="numberFrames", lower=0)
+        radio_options_frame = tk.Frame(master=innerStartFrame, relief='flat', borderwidth=2, padx=5)
+        radio_options_frame.grid(row = 0, column = 1, sticky='ew', padx=5)
+        
+        v = tk.IntVar()
+        v.set(0)  # initializing the choice, i.e. Python
 
+        radio_options = [("Yes", 0), ("No", 1)]
+
+        def ShowChoice():
+            MeasurerInstance.threshold = float(100) if v.get() == 0 else float(200)
+
+        label = tk.Label(innerStartFrame, text="Include shadows?", pady=3)
+        label.grid(row = 0, column = 0, sticky='w', padx=5)
+
+        for option, val in radio_options:
+            tk.Radiobutton(radio_options_frame, 
+                        text=option,
+                        padx = 5, 
+                        variable=v, 
+                        command=ShowChoice,
+                        value=val).grid(row = 0, column = val, sticky='ew', padx=5)  
+        
+        ConstructApp.numberFramesSetting = DigitEntry("Number of Frames: ", 3, 1, innerStartFrame, trace="numberFrames", lower=0)
+    
         self.startButton = tk.Button(startFrame, text='START', command=self.StartButton, bg="grey50", font=("Courier", 24), fg="white", state="disabled")
         self.startButton.pack(fill=tk.BOTH, pady=5)
         
@@ -330,7 +354,7 @@ class ConstructApp():
     def StartButton(self):
         self.backgroundButton["state"] = "disabled"
         self.startButton["state"] = "disabled"
-        ConstructApp.thresholdSetting.Activate(False)
+        # ConstructApp.thresholdSetting.Activate(False)
         ConstructApp.numberFramesSetting.Activate(False)
         ConstructApp.fishIDEntry["state"] = "disabled"
         ConstructApp.additionalText["state"] = "disabled"
@@ -354,7 +378,7 @@ class ConstructApp():
             
             self.startButton.after(1000, self.ReinstateSetting, thread)
         else:
-            ConstructApp.thresholdSetting.Activate(True)
+            # ConstructApp.thresholdSetting.Activate(True)
             ConstructApp.numberFramesSetting.Activate(True)
             self.startButton["state"] = "normal"
             self.startButton["text"] = "START"

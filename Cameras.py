@@ -107,7 +107,11 @@ class Cameras():
         state = Cameras.StopGrabbing()
         if state:
             Cameras.currentCam = newCam
-            Cameras.StartGrabbing()
+            try:
+                Cameras.StartGrabbing()
+            except Exception as e:
+                if "Failed to open device" in str(e):
+                    Cameras.connected = False
         else:
             print("ERROR")
             Cameras.connected = False # will automatically shut down app in constructor

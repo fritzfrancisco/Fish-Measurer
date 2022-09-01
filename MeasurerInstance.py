@@ -11,7 +11,7 @@ from skimage.morphology import skeletonize
 import pandas as pd
 
 class MeasurerInstance():
-    def __init__(self, outputFolder, format, min_skel_size=0.01, max_curvature=50):
+    def __init__(self, outputFolder, format, max_curvature=50):
         ## 26.35
         self.outputFolder = outputFolder
         self.format = format
@@ -26,7 +26,6 @@ class MeasurerInstance():
         MeasurerInstance.error = (False, None)
 
         self.max_curvature = math.pi / 180 * max_curvature
-        self.min_skel_size = MeasurerInstance.ConvertLengthToPixels(min_skel_size)
         
         Cameras.ConnectMeasurer(self)
         
@@ -107,9 +106,8 @@ class MeasurerInstance():
             fil.create_mask(verbose=False, use_existing_mask=True)
             fil.medskel(verbose=False)
             
-            # Skeletons must be at least 50 pixels long to count
             try:
-                fil.analyze_skeletons(skel_thresh=self.min_skel_size*u.pix)
+                fil.analyze_skeletons()
             except ValueError:
                 print("Filfinder error")
                 continue
@@ -143,31 +141,40 @@ class MeasurerInstance():
         
         # Remove outliers
         if self.filament_lengths:
-            self.length_avg = statistics.mean([lens for i, lens in self.filament_lengths])
+            initial_list = [lens for i, lens in self.filament_lengths]
+            self.length_avg = statistics.mean(initial_list)
+            print("Avg length: " + str(self.length_avg))
+            print("Total list entries: " + str(initial_list.count))
+            
             refined_list = [(fil_length, self.measurements[i], i) for i, fil_length in self.filament_lengths if abs((fil_length - self.length_avg) / self.length_avg) <= 0.1]
             MeasurerInstance.trial_count = len(refined_list)
             split_list = [list(t) for t in zip(*refined_list)]
+            print("Refined list entries: " + str(MeasurerInstance.trial_count))
             
-            self.length_stats = (statistics.mean(split_list[0]), statistics.stdev(split_list[0]))
-            self.curve_stats = (statistics.mean([split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])]), statistics.stdev([split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])])) 
-            
-            df = pd.DataFrame(data={"frame_number": split_list[2], "length_mm": split_list[0], "curvature_rad": [split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])]})
-            df.to_csv(os.path.join(target_folder_name, "data-output.csv"), sep=';',index=False) 
-            
-            # find the instance with the closest length value
-            try:
-                local_index = split_list[0].index(min(split_list[0], key=lambda x:abs(x-self.length_stats[0])))
+            if not split_list:
+                print("All lengths filtered out!")
+                MeasurerInstance.error = (True, "The lengths obtained are too variant to be consolidated. The data will not be saved, please re-measure")
+            else:
+                self.length_stats = (statistics.mean(split_list[0]), statistics.stdev(split_list[0]))
+                self.curve_stats = (statistics.mean([split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])]), statistics.stdev([split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])])) 
                 
-                closest_instance = split_list[1][local_index]
-                closest_index = split_list[2][local_index]
-            except (KeyError):
-                MeasurerInstance.error = (True, "There was an error processing the obtained data. The data wsa not saved, please try again")
-            
-            print("\nFinal: " + str(self.curve_stats[0]) + "; " + str(self.length_stats[0]) + "; " + str(closest_index))
-            chosen_image = MeasurerInstance.WatermarkImage(closest_instance, closest_index, self.length_stats, self.curve_stats)
-            
-            # Save it and open it
-            state = cv2.imwrite(os.path.join(target_folder_name, "closest-image" + str(self.format)), chosen_image)
+                df = pd.DataFrame(data={"frame_number": split_list[2], "length_mm": split_list[0], "curvature_rad": [split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])]})
+                df.to_csv(os.path.join(target_folder_name, "data-output.csv"), sep=';',index=False) 
+                
+                # find the instance with the closest length value
+                try:
+                    local_index = split_list[0].index(min(split_list[0], key=lambda x:abs(x-self.length_stats[0])))
+                    
+                    closest_instance = split_list[1][local_index]
+                    closest_index = split_list[2][local_index]
+                except (KeyError):
+                    MeasurerInstance.error = (True, "There was an error processing the obtained data. The data wsa not saved, please try again")
+                
+                print("\nFinal: " + str(self.curve_stats[0]) + "; " + str(self.length_stats[0]) + "; " + str(closest_index))
+                chosen_image = MeasurerInstance.WatermarkImage(closest_instance, closest_index, self.length_stats, self.curve_stats)
+                
+                # Save it and open it
+                state = cv2.imwrite(os.path.join(target_folder_name, "closest-image" + str(self.format)), chosen_image)
         else:
             MeasurerInstance.error = (True, "The length values could not be obtained from the image. Either the blob was too small and filtered out, or the skeletonization process was too complex. Please try again")
                 
@@ -214,7 +221,7 @@ class MeasurerInstance():
         
         # Get the pixels on the longpath and all the [many] branch endpoints
         # the longpath pixels are not in order, and so we need to find the
-        # endpoints of this path manually
+        # endpoints of this path manually --> really annoying
         longpath_pixel_coords = filament.longpath_pixel_coords
         long_zipped = list(zip(longpath_pixel_coords[0], longpath_pixel_coords[1]))
         end_pt_coords = filament.end_pts
