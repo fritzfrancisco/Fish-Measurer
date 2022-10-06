@@ -18,6 +18,8 @@ class Cameras():
     global current_frame
     global binarized_frame
     global raw_frame
+    conversion_slope = None
+    conversion_intercept = None
     
     def __init__(self, **kwargs):
         # converter for opencv bgr format
@@ -156,10 +158,63 @@ class Cameras():
             time.sleep(1/Cameras.framerate)
             
         return (raw_list, binarized_list)
+    
+    @staticmethod
+    def ConvertPixelsToLength(pixels):
+        return Cameras.conversion_slope * pixels + Cameras.conversion_intercept
+
+    @staticmethod
+    def ConvertLengthToPixels(length):
+        return (length - Cameras.conversion_intercept) / Cameras.conversion_slope
 
     def UpdateCamera(fishID=None, addText=None):
         if current_frame is not None:
-            img = cv2.resize(current_frame, None, fy=.39, fx=.39)
+            img = current_frame
+            
+            # ArUco markers
+            # https://pyimagesearch.com/2020/12/21/detecting-aruco-markers-with-opencv-and-python/
+            arucoDict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_4X4_50)
+            arucoParams = cv2.aruco.DetectorParameters_create()
+            (corners, ids, rejected) = cv2.aruco.detectMarkers(img, arucoDict,
+                parameters=arucoParams)
+            
+            # verify *at least* one ArUco marker was detected
+            if len(corners) > 0:
+                # flatten the ArUco IDs list
+                ids = ids.flatten()
+                
+                distances = []
+                # loop over the detected ArUCo corners
+                for (markerCorner, markerID) in zip(corners, ids):
+                    # extract the marker corners (which are always returned in
+                    # top-left, top-right, bottom-right, and bottom-left order)
+                    corners = markerCorner.reshape((4, 2))
+                    (topLeft, topRight, bottomRight, bottomLeft) = corners
+                    
+                    # convert each of the (x, y)-coordinate pairs to integers
+                    topRight = (int(topRight[0]), int(topRight[1]))
+                    bottomRight = (int(bottomRight[0]), int(bottomRight[1]))
+                    bottomLeft = (int(bottomLeft[0]), int(bottomLeft[1]))
+                    topLeft = (int(topLeft[0]), int(topLeft[1]))
+                
+                    # draw the bounding box of the ArUCo detection
+                    cv2.line(img, topLeft, topRight, (0, 255, 0), 2)
+                    cv2.line(img, topRight, bottomRight, (0, 255, 0), 2)
+                    cv2.line(img, bottomRight, bottomLeft, (0, 255, 0), 2)
+                    cv2.line(img, bottomLeft, topLeft, (0, 255, 0), 2)
+                    
+                    distance = ((topRight[0] - topLeft[0])**2 + (topRight[1] - topLeft[1])**2)**(0.5)
+                    distances.append(distance)
+
+                # Calculate calibration parameters
+                if len(ids) > 1:
+                    max_pixel_dist = max(distances)
+                    min_pixel_dist = min(distances)
+                    Cameras.conversion_slope = (2-1) / (max_pixel_dist-min_pixel_dist)
+                    Cameras.conversion_intercept = 2-Cameras.conversion_slope*max_pixel_dist
+            
+            img = cv2.resize(img, None, fy=.39, fx=.39)
+            
             img = cv2.putText(img, datetime.now().strftime("%d.%m.%Y %H:%M:%S"), (15, 25), cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), lineType=cv2.LINE_AA)
             
             if fishID != None and fishID != '':

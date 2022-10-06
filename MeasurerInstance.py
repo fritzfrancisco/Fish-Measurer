@@ -7,11 +7,12 @@ import math
 import statistics
 import os
 from datetime import datetime
-from skimage.morphology import skeletonize
+from skimage import img_as_bool
+from skimage.morphology import skeletonize, medial_axis, binary_closing, binary_opening
 import pandas as pd
 
 class MeasurerInstance():
-    def __init__(self, outputFolder, format, max_curvature=50):
+    def __init__(self, outputFolder, format):
         ## 26.35
         self.outputFolder = outputFolder
         self.format = format
@@ -24,16 +25,9 @@ class MeasurerInstance():
         MeasurerInstance.addText = None
         MeasurerInstance.processingFrame = None
         MeasurerInstance.error = (False, None)
+        MeasurerInstance.dist_transform = None
 
-        self.max_curvature = math.pi / 180 * max_curvature
-        
         Cameras.ConnectMeasurer(self)
-        
-    def ConvertPixelsToLength(pixels):
-        return 0.098*pixels + 1.6049
-
-    def ConvertLengthToPixels(length):
-        return (length - 1.6049) / 0.098
 
     def ProcessImage(self, frame):
         fgmask = self.fgbg.apply(frame, learningRate=0)
@@ -99,15 +93,33 @@ class MeasurerInstance():
             self.gradientOpen = cv2.addWeighted(opening,0.5,self.gradient,0.5,0)
             self.processed_image = raw[i]
             
-            # skeleton = cv2.ximgproc.thinning(opening)
-            skeleton = skeletonize(np.round_((opening / 255).astype('uint8')))
+            # Skeletonize
+            bool_image = img_as_bool(binary_opening(opening))
+            # bool_image = binary_opening((np.round_(opening / 255)).astype('uint8'))
             
-            fil = FilFinder2D(skeleton, distance=1500*u.pix, mask=skeleton)
+            # skeleton = cv2.ximgproc.thinning(opening)
+            timer = datetime.now()
+            skeleton = binary_closing(skeletonize(bool_image))
+            timing = datetime.now() - timer
+            print ("normal took " + str(timing.total_seconds()) + " seconds")
+            
+            # temp = cv2.addWeighted((skeleton * 255).astype('uint8'),0.65,self.gradientOpen,0.35,0)
+            # temp = cv2.resize(temp, None, fy=0.7, fx=0.7)
+            # cv2.imshow("normal", temp) 
+            # cv2.waitKey(0)
+            
+            timer = datetime.now()
+            other_skeleton, MeasurerInstance.dist_transform = medial_axis(bool_image, return_distance=True)
+            other_skeleton = binary_closing(other_skeleton)
+            timing = datetime.now() - timer
+            print ("medial took " + str(timing.total_seconds()) + " seconds")
+                
+            fil = FilFinder2D(other_skeleton, mask=other_skeleton)
             fil.create_mask(verbose=False, use_existing_mask=True)
             fil.medskel(verbose=False)
             
             try:
-                fil.analyze_skeletons()
+                fil.analyze_skeletons(skel_thresh=1*u.pix)
             except ValueError:
                 print("Filfinder error")
                 continue
@@ -126,16 +138,16 @@ class MeasurerInstance():
                 continue
                 
             self.current_images = {"processed": self.processed_image, "contour": self.gradient, "threshed": opening, "raw": cv2.cvtColor(raw[i], cv2.COLOR_BGR2GRAY)}
-            fil_length, curvature = self.AssessFilament(filament)
-            fil_length = MeasurerInstance.ConvertPixelsToLength(fil_length)
-            print("frame: " + str(i), "fil length: " + str(fil_length), "curvature: " + str(curvature))
+            fil_length_pixels = self.AssessFilament(filament)
+            fil_length = Cameras.ConvertPixelsToLength(fil_length_pixels)
+            print("frame: " + str(i), "fil length: " + str(fil_length), "pixels: " + str(fil_length_pixels))
             
             extended_frames_path = os.path.join(frames_path, str(i) + str(self.format))
             state = cv2.imwrite(extended_frames_path, self.current_images["processed"])
             
             # Save the data from the frame
             self.filament_lengths.append((i, fil_length))
-            self.measurements[i] = {"length": fil_length, "curvature": curvature, "images": self.current_images}
+            self.measurements[i] = {"length": fil_length, "images": self.current_images}
 
         MeasurerInstance.processingFrame = None
         
@@ -144,7 +156,8 @@ class MeasurerInstance():
             initial_list = [lens for i, lens in self.filament_lengths]
             self.length_avg = statistics.mean(initial_list)
             print("Avg length: " + str(self.length_avg))
-            print("Total list entries: " + str(initial_list.count))
+            print("y = {0}x + {1}".format(Cameras.conversion_slope, Cameras.conversion_intercept))
+            # print("Total list entries: " + str(initial_list.count()))
             
             refined_list = [(fil_length, self.measurements[i], i) for i, fil_length in self.filament_lengths if abs((fil_length - self.length_avg) / self.length_avg) <= 0.1]
             MeasurerInstance.trial_count = len(refined_list)
@@ -156,9 +169,8 @@ class MeasurerInstance():
                 MeasurerInstance.error = (True, "The lengths obtained are too variant to be consolidated. The data will not be saved, please re-measure")
             else:
                 self.length_stats = (statistics.mean(split_list[0]), statistics.stdev(split_list[0]))
-                self.curve_stats = (statistics.mean([split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])]), statistics.stdev([split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])])) 
                 
-                df = pd.DataFrame(data={"frame_number": split_list[2], "length_mm": split_list[0], "curvature_rad": [split_list[1][i]["curvature"] for i, entry in enumerate(split_list[1])]})
+                df = pd.DataFrame(data={"frame_number": split_list[2], "length_mm": split_list[0]})
                 df.to_csv(os.path.join(target_folder_name, "data-output.csv"), sep=';',index=False) 
                 
                 # find the instance with the closest length value
@@ -170,29 +182,25 @@ class MeasurerInstance():
                 except (KeyError):
                     MeasurerInstance.error = (True, "There was an error processing the obtained data. The data wsa not saved, please try again")
                 
-                print("\nFinal: " + str(self.curve_stats[0]) + "; " + str(self.length_stats[0]) + "; " + str(closest_index))
-                chosen_image = MeasurerInstance.WatermarkImage(closest_instance, closest_index, self.length_stats, self.curve_stats)
+                print("\nFinal: " + str(self.length_stats[0]) + "; " + str(closest_index))
+                chosen_image = MeasurerInstance.WatermarkImage(closest_instance, closest_index, self.length_stats)
                 
                 # Save it and open it
                 state = cv2.imwrite(os.path.join(target_folder_name, "closest-image" + str(self.format)), chosen_image)
         else:
             MeasurerInstance.error = (True, "The length values could not be obtained from the image. Either the blob was too small and filtered out, or the skeletonization process was too complex. Please try again")
                 
-    def WatermarkImage(closest_instance, closest_index, length_stats, curve_stats):
+    def WatermarkImage(closest_instance, closest_index, length_stats):
         # Watermark the results
         chosen_image = cv2.putText(closest_instance["images"]["processed"], 
-                                    "Curvature (deg): " + "{:.2f}".format(curve_stats[0] * 180 / math.pi) + \
-                                    " +/- " + "{:.2f}".format(curve_stats[1] * 180 / math.pi),
-                                    (15, closest_instance["images"]["processed"].shape[0]-120), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
-        
-        chosen_image = cv2.putText(chosen_image, 
                                     "Length: " +  "{:.2f}".format(length_stats[0]) + "mm (" + \
                                     "{:.2f}".format(closest_instance["length"]) + "mm)" + \
-                                    " +/- " + "{:.2f}".format(length_stats[1]) + "mm", (15, chosen_image.shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
+                                    " +/- " + "{:.2f}".format(length_stats[1]) + "mm", 
+                                    (15, closest_instance["images"]["processed"].shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
         chosen_image = cv2.putText(chosen_image, 
                                     "{0}".format(MeasurerInstance.trial_count) +  " images",
-                                    (15, chosen_image.shape[0]-210), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
+                                    (15, chosen_image.shape[0]-120), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
         # Add metadata
         chosen_image = cv2.putText(chosen_image, datetime.now().strftime("%d.%m.%Y %H:%M:%S"), (15, 70), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
@@ -215,17 +223,15 @@ class MeasurerInstance():
         fil_length = filament.length(u.pix).value
         added_dist = 0
         
-        filament.rht_analysis()
-        fil_curvature = filament.curvature.value
-        fil_orientation = filament.orientation.value
-        
         # Get the pixels on the longpath and all the [many] branch endpoints
         # the longpath pixels are not in order, and so we need to find the
         # endpoints of this path manually --> really annoying
         longpath_pixel_coords = filament.longpath_pixel_coords
-        long_zipped = list(zip(longpath_pixel_coords[0], longpath_pixel_coords[1]))
-        end_pt_coords = filament.end_pts
         longpath_pixel_coords_array = np.asarray(longpath_pixel_coords)
+        long_zipped = list(zip(longpath_pixel_coords[0], longpath_pixel_coords[1]))
+        
+        # Gets the end points of the entire non-pruned filament
+        end_pt_coords = filament.end_pts
         
         end_candidates = []
         list_max = 1000000
@@ -233,7 +239,9 @@ class MeasurerInstance():
             # Get the distance from each endpoint to all other points on the longpath
             pt_array = np.asarray(pt).reshape((2,1))
             dist_mat = np.linalg.norm(np.subtract(longpath_pixel_coords_array, pt_array), axis=0)
-        
+
+            # The actual endpoints will be very close to (even on top of) at least one
+            # of the points on the long path
             min_dist = np.amin(dist_mat)
             if len(end_candidates) < 2:
                 end_candidates.append((pt, min_dist))
@@ -256,32 +264,59 @@ class MeasurerInstance():
         self.current_images["long_path"] = longest_path_mat
         
         # Run the intersection exercise for each end point to determine
-        # how much length to add onto the ends of the longpath
-        slope = math.cos(fil_orientation) / math.sin(fil_orientation)
+        # the path to add
         for y_pt, x_pt in end_pts:
+            distance = MeasurerInstance.dist_transform[y_pt][x_pt]
+            fil_length += distance
+            added_dist += distance
+            print("distance_transform: " + str(distance))
+            
+            # Start with the appropriate slope for the line mask
+            circle_mask = np.zeros(dimensions)
+            circle_radius = 20
+            for x in range(x_pt - circle_radius, x_pt + circle_radius + 1):
+                for y in range(y_pt - circle_radius, y_pt + circle_radius + 1):
+                    if x <= dimensions[1] - 1 and x >= 0:
+                        if y <= dimensions[0] - 1 and y >= 0:
+                            ref_val = ((x-x_pt)**2 + (y-y_pt)**2)**(0.5)
+                            if ref_val >= 19.3 and ref_val <= 20.7:
+                                circle_mask[y][x] = 1
+            
+            combined_array = np.add(circle_mask, longest_path_mat)
+            pts_of_interest = list(zip(*np.where(combined_array > 1.5)))
+            
+            # Just take the first point, they should all yield similar results if more than one
+            other_point = pts_of_interest[0]
+            slope = (y_pt - other_point[0]) / (x_pt -  other_point[1])
+
             # Get the line equation passing through the end point
             line_mask = np.zeros(dimensions)
-            b = dimensions[0] - y_pt - slope * x_pt
+            b = y_pt - slope * x_pt
             
             for x in range(dimensions[1]):
-                y_prev = round(slope * (x - 1) + b)
-                y = round(slope * x + b)
-                y_next = round(slope * (x + 1) + b)
-                
-                if y < dimensions[0] - 1 and y >= 0:
-                    line_mask[dimensions[0] - 1 - y][x] = 1
-                
-                # Fill in as many pixels as needed to keep a continuous line,
-                # keeping to a 50% tributary width (hence dividing by 2)
-                # otherwise we have a dotted line
-                if y_prev != y_next:
-                    y_start = y_prev + round((y - y_prev) / 2)
-                    y_end = y + round((y_next - y) / 2)
+                try:
+                    y_prev = round(slope * (x - 1) + b)
+                    y = round(slope * x + b)
+                    y_next = round(slope * (x + 1) + b)
                     
-                    y_step = 1 if y_start <= y_end else -1
-                    for y in range(y_start, y_end, y_step):
-                        if y < dimensions[0] - 1 and y >= 0:
-                            line_mask[dimensions[0] - 1 - y][x] = 1
+                    if y < dimensions[0] - 1 and y >= 0:
+                        line_mask[y][x] = 1
+                    
+                    # Fill in as many pixels as needed to keep a continuous line,
+                    # keeping to a 50% tributary width (hence dividing by 2)
+                    # otherwise we have a dotted line
+                    if y_prev != y_next:
+                        y_start = y_prev + round((y - y_prev) / 2)
+                        y_end = y + round((y_next - y) / 2)
+                        
+                        y_step = 1 if y_start <= y_end else -1
+                        for y in range(y_start, y_end, y_step):
+                            if y < dimensions[0] - 1 and y >= 0:
+                                line_mask[y][x] = 1
+                except OverflowError:
+                    print("Infinity error")
+                    print("x: " + str(x) + "; slope: " + str(slope))
+                    continue
             
             # Find where the thresholded fish boundary and the line intersect
             # There will be multiple points since the contour is not one-pixel thick
@@ -303,9 +338,6 @@ class MeasurerInstance():
                 elif minimum_distance > dist:
                     minimum_distance = dist
                     min_point_set = coord
-                        
-            fil_length += minimum_distance
-            added_dist += minimum_distance
             
             # Fill in the skeletonized long path array with these extensions
             step_size = 1 if x_pt <= min_point_set[1] else -1
@@ -314,12 +346,13 @@ class MeasurerInstance():
                 y = round(slope * x + b)
                 y_next = round(slope * (x + step_size) + b)
                 
-                if dimensions[0] - min_point_set[0] >= dimensions[0] - y_pt:
-                    if y <= dimensions[0] - min_point_set[0] and y >= dimensions[0] - y_pt:
-                        self.current_images["long_path"][dimensions[0] - 1 - y][x] = 1
+                if min_point_set[0] >= y_pt:
+                    if y <= min_point_set[0] and y >= y_pt:
+                        self.current_images["long_path"][y][x] = 1
+                        # self.current_images["long_path"][1 - y][x] = 1
                 else:
-                    if y <= dimensions[0] - y_pt and y >= dimensions[0] - min_point_set[0]:
-                        self.current_images["long_path"][dimensions[0] - 1 - y][x] = 1
+                    if y <= y_pt and y >= min_point_set[0]:
+                        self.current_images["long_path"][y][x] = 1
                     
                 if y_prev != y_next:
                     y_start = y_prev + round((y - y_prev) / 2)
@@ -327,20 +360,20 @@ class MeasurerInstance():
                     
                     y_step = 1 if y_start <= y_end else -1
                     for y in range(y_start, y_end, y_step):
-                        if dimensions[0] - min_point_set[0] >= dimensions[0] - y_pt:
-                            if y <= dimensions[0] - min_point_set[0] and y >= dimensions[0] - y_pt:
-                                self.current_images["long_path"][dimensions[0] - 1 - y][x] = 1
+                        if min_point_set[0] >= y_pt:
+                            if y <= min_point_set[0] and y >= y_pt:
+                                self.current_images["long_path"][y][x] = 1
                         else:
-                            if y <= dimensions[0] - y_pt and y >= dimensions[0] - min_point_set[0]:
-                                self.current_images["long_path"][dimensions[0] - 1 - y][x] = 1
+                            if y <= y_pt and y >= min_point_set[0]:
+                                self.current_images["long_path"][y][x] = 1
                     
-        self.current_images["long_path"] = np.where(self.current_images["long_path"] > 1, 1, self.current_images["long_path"])        
+        self.current_images["long_path"] = np.where(self.current_images["long_path"] > 1, 1, self.current_images["long_path"])   
         
         longOpenGradient = cv2.addWeighted((self.current_images["long_path"] * 255).astype('uint8'),0.6,self.gradientOpen,0.4,0)
         image = MeasurerInstance.ShowImage(self.current_images["processed"], cv2.cvtColor(longOpenGradient, cv2.COLOR_GRAY2RGB), name="binarized") 
         self.current_images["processed"] = image
         
-        return fil_length, fil_curvature
+        return fil_length
 
     def ShowImage(image1, image2, resize=0.5, name='Image', pausekey=False, show=False):
         image = cv2.addWeighted(image1,0.65,image2,0.35,0)

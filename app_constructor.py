@@ -238,7 +238,7 @@ class ConstructApp():
         backgroundFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=10, pady=10, bg="grey80")
         backgroundFrame.pack(fill=tk.BOTH)
         
-        self.backgroundButton = tk.Button(backgroundFrame, text='TRAIN', command=self.BackgroundButton, bg="#74B224", font=("Courier", 24), fg="white")
+        self.backgroundButton = tk.Button(backgroundFrame, text='TRAIN', command=self.BackgroundButton, bg="#74B224", font=("Courier", 24), fg="white", disabledforeground="white")
         self.backgroundButton.pack(fill=tk.BOTH)
 
         ## -- START BUTTON -----------------------------------------------------------------------------------
@@ -274,10 +274,24 @@ class ConstructApp():
         
         ConstructApp.numberFramesSetting = DigitEntry("Number of Frames: ", 3, 1, innerStartFrame, trace="numberFrames", lower=0)
     
-        self.startButton = tk.Button(startFrame, text='START', command=self.StartButton, bg="grey50", font=("Courier", 24), fg="white", state="disabled")
+        self.startButton = tk.Button(startFrame, text='START', command=self.StartButton, bg="grey50", font=("Courier", 24), fg="white", state="disabled", disabledforeground="white")
         self.startButton.pack(fill=tk.BOTH, pady=5)
         
         paneeli_image.after(15, UpdateFeed) 
+        
+        # Loop to ensure calibration before training background
+        def CheckIfCalibrated():
+            if Cameras.conversion_slope is not None and Cameras.conversion_intercept is not None:
+                self.backgroundButton["text"] = "TRAIN"
+                self.backgroundButton["state"] = "normal"
+                self.backgroundButton.configure(bg = "#74B224")
+            else:
+                self.backgroundButton["text"] = "PLS CALIBRATE"
+                self.backgroundButton["state"] = "disabled"
+                self.backgroundButton.configure(bg = "grey50")
+                self.backgroundButton.after(500, CheckIfCalibrated)
+            
+        self.backgroundButton.after(15, CheckIfCalibrated)
         
         def on_closing():
             sys.stdout.close()
@@ -291,10 +305,11 @@ class ConstructApp():
 
         if not thread.is_alive():
             self.backgroundButton["text"] = "RESTART"
-            self.backgroundButton.configure(bg = "#185CA8")
             self.backgroundButton["state"] = "normal"
-            self.startButton.configure(bg = "#74B224")
+            self.backgroundButton.configure(bg = "#185CA8")
+            
             self.startButton["state"] = "normal"
+            self.startButton.configure(bg = "#74B224")
         else:
             if (isinstance(label, int) or isinstance(label, float)) and label != 0:
                 self.backgroundButton.after(1000, self.ButtonTextCountDown, label-1, thread)
@@ -323,6 +338,7 @@ class ConstructApp():
                 state, message = MeasurerInstance.error
                 if (state):
                     tk.messagebox.showerror("Error", message)
+                    MeasurerInstance.error = (False, "")
                     self.backgroundButton.after(10000, ErrorCheckLoop)
                     
                 else:
@@ -342,8 +358,8 @@ class ConstructApp():
             # Reconfigure buttons and delete the previous instance
             self.backgroundButton["text"] = "TRAIN"
             self.backgroundButton.configure(bg = "#74B224")
-            self.startButton.configure(bg = "grey50")
             self.startButton["state"] = "disabled"
+            self.startButton.configure(bg = "grey50")
             
             # Unlock settings
             self.BackgroundButtonsActive(True)
