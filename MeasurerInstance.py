@@ -3,12 +3,11 @@ import cv2
 import numpy as np
 from fil_finder import FilFinder2D
 import astropy.units as u
-import math
 import statistics
 import os
 from datetime import datetime
 from skimage import img_as_bool
-from skimage.morphology import skeletonize, medial_axis, binary_closing, binary_opening
+from skimage.morphology import medial_axis, binary_closing, binary_opening
 import pandas as pd
 
 class MeasurerInstance():
@@ -29,11 +28,12 @@ class MeasurerInstance():
 
         Cameras.ConnectMeasurer(self)
 
-    def ProcessImage(self, frame):
+    def SubtractBackground(self, frame):
+        # Subtract the background and binarize via thresholding (according to shadows setting)
         fgmask = self.fgbg.apply(frame, learningRate=0)
         fully_binarized = cv2.threshold(fgmask, MeasurerInstance.threshold, 255, cv2.THRESH_BINARY)[1]
         
-        # Fill all contours and only show contour with largest area
+        # Fill all blob contours and only show the contour with largest area
         try:
             contour, hier = cv2.findContours(fully_binarized,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
             biggestContour = max(contour, key = cv2.contourArea)
@@ -62,6 +62,7 @@ class MeasurerInstance():
     def SkeletonizeFrames(self, frames):
         self.measurements = {}
         self.current_images = {}
+        self.filament_lengths = []
         
         (raw, binarized) = frames
         
@@ -95,26 +96,14 @@ class MeasurerInstance():
             
             # Skeletonize
             bool_image = img_as_bool(binary_opening(opening))
-            # bool_image = binary_opening((np.round_(opening / 255)).astype('uint8'))
-            
-            # skeleton = cv2.ximgproc.thinning(opening)
-            timer = datetime.now()
-            skeleton = binary_closing(skeletonize(bool_image))
-            timing = datetime.now() - timer
-            print ("normal took " + str(timing.total_seconds()) + " seconds")
-            
-            # temp = cv2.addWeighted((skeleton * 255).astype('uint8'),0.65,self.gradientOpen,0.35,0)
-            # temp = cv2.resize(temp, None, fy=0.7, fx=0.7)
-            # cv2.imshow("normal", temp) 
-            # cv2.waitKey(0)
             
             timer = datetime.now()
-            other_skeleton, MeasurerInstance.dist_transform = medial_axis(bool_image, return_distance=True)
-            other_skeleton = binary_closing(other_skeleton)
+            skeleton, MeasurerInstance.dist_transform = medial_axis(bool_image, return_distance=True)
+            skeleton = binary_closing(skeleton)
             timing = datetime.now() - timer
             print ("medial took " + str(timing.total_seconds()) + " seconds")
                 
-            fil = FilFinder2D(other_skeleton, mask=other_skeleton)
+            fil = FilFinder2D(skeleton, mask=skeleton)
             fil.create_mask(verbose=False, use_existing_mask=True)
             fil.medskel(verbose=False)
             
@@ -137,13 +126,15 @@ class MeasurerInstance():
                 print("could not grab filament")
                 continue
                 
-            self.current_images = {"processed": self.processed_image, "contour": self.gradient, "threshed": opening, "raw": cv2.cvtColor(raw[i], cv2.COLOR_BGR2GRAY)}
+            self.current_images = {"processed": self.processed_image, "contour": self.gradient, "threshed": opening, "raw": cv2.cvtColor(raw[i], cv2.COLOR_BGR2GRAY),  "full_skeleton": cv2.addWeighted((skeleton * 255).astype('uint8'), 0.65, self.gradientOpen, 0.35, 0)}
             fil_length_pixels = self.AssessFilament(filament)
             fil_length = Cameras.ConvertPixelsToLength(fil_length_pixels)
             print("frame: " + str(i), "fil length: " + str(fil_length), "pixels: " + str(fil_length_pixels))
             
             extended_frames_path = os.path.join(frames_path, str(i) + str(self.format))
-            state = cv2.imwrite(extended_frames_path, self.current_images["processed"])
+            extended_frames_path2 = os.path.join(frames_path, "full_skeleton_" + str(i) + str(self.format))
+            cv2.imwrite(extended_frames_path, self.current_images["processed"])
+            cv2.imwrite(extended_frames_path2, self.current_images["full_skeleton"])
             
             # Save the data from the frame
             self.filament_lengths.append((i, fil_length))
@@ -193,9 +184,9 @@ class MeasurerInstance():
     def WatermarkImage(closest_instance, closest_index, length_stats):
         # Watermark the results
         chosen_image = cv2.putText(closest_instance["images"]["processed"], 
-                                    "Length: " +  "{:.2f}".format(length_stats[0]) + "mm (" + \
-                                    "{:.2f}".format(closest_instance["length"]) + "mm)" + \
-                                    " +/- " + "{:.2f}".format(length_stats[1]) + "mm", 
+                                    "Length: " +  "{:.2f}".format(length_stats[0]) + "cm (" + \
+                                    "{:.2f}".format(closest_instance["length"]) + "cm)" + \
+                                    " +/- " + "{:.2f}".format(length_stats[1]) + "cm", 
                                     (15, closest_instance["images"]["processed"].shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
         chosen_image = cv2.putText(chosen_image, 

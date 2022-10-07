@@ -129,7 +129,7 @@ class Cameras():
         Cameras.lock.acquire()
         raw_frame = frame
         if Cameras.active_measurer is not None and Cameras.active_measurer.background is not None:
-            binarized_frame = Cameras.active_measurer.ProcessImage(raw_frame)
+            binarized_frame = Cameras.active_measurer.SubtractBackground(raw_frame)
             current_frame = binarized_frame
         else:
             binarized_frame = None
@@ -210,8 +210,10 @@ class Cameras():
                 if len(ids) > 1:
                     max_pixel_dist = max(distances)
                     min_pixel_dist = min(distances)
-                    Cameras.conversion_slope = (2-1) / (max_pixel_dist-min_pixel_dist)
-                    Cameras.conversion_intercept = 2-Cameras.conversion_slope*max_pixel_dist
+                    max_id = max(ids)
+                    min_id = min(ids)
+                    Cameras.conversion_slope = (max_id-min_id) / (max_pixel_dist-min_pixel_dist)
+                    Cameras.conversion_intercept = max_id-Cameras.conversion_slope*max_pixel_dist
             
             img = cv2.resize(img, None, fy=.39, fx=.39)
             
