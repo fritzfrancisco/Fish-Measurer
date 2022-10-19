@@ -9,6 +9,9 @@ from datetime import datetime
 from skimage import img_as_bool
 from skimage.morphology import medial_axis, binary_closing, binary_opening
 import pandas as pd
+import matplotlib.pyplot as plt
+
+from Measurement import Measurement
 
 class MeasurerInstance():
     def __init__(self, outputFolder, format):
@@ -59,7 +62,7 @@ class MeasurerInstance():
             
         self.background = fgmask
     
-    def SkeletonizeFrames(self, frames):
+    def Analyze(self, frames):
         self.measurements = {}
         self.current_images = {}
         self.filament_lengths = []
@@ -82,63 +85,38 @@ class MeasurerInstance():
         if not os.path.isdir(frames_path):
             os.mkdir(frames_path)
         
+        # Run through each frame
         for i in range(len(raw)):
-            MeasurerInstance.processingFrame = i
+            current_measurement = Measurement(i, raw[i], binarized[i])
             
-            # Apply morphological operations (image processing)
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-            
-            opening = cv2.morphologyEx(binarized[i], cv2.MORPH_OPEN, kernel)
-            self.gradient = cv2.morphologyEx(opening, cv2.MORPH_GRADIENT, kernel) 
-            
-            self.gradientOpen = cv2.addWeighted(opening,0.5,self.gradient,0.5,0)
-            self.processed_image = raw[i]
-            
-            # Skeletonize
-            bool_image = img_as_bool(binary_opening(opening))
-            
-            timer = datetime.now()
-            skeleton, MeasurerInstance.dist_transform = medial_axis(bool_image, return_distance=True)
-            skeleton = binary_closing(skeleton)
-            timing = datetime.now() - timer
-            print ("medial took " + str(timing.total_seconds()) + " seconds")
+            if current_measurement.successful_init:
+                extended_frames_path = os.path.join(frames_path, str(i) + str(self.format))
+                cv2.imwrite(extended_frames_path, current_measurement.skeleton)
                 
-            fil = FilFinder2D(skeleton, mask=skeleton)
-            fil.create_mask(verbose=False, use_existing_mask=True)
-            fil.medskel(verbose=False)
-            
-            try:
-                fil.analyze_skeletons(skel_thresh=1*u.pix)
-            except ValueError:
-                print("Filfinder error")
-                continue
-            
-            # Attempt to grab the relevant filament
-            filament = None
-            try:
-                if len(fil.lengths()) > 1:
-                    lengths = [q.value for q in fil.lengths()]
-                    index = lengths.index(max(fil.lengths()).value)
-                    filament = fil.filaments[index]
-                else:
-                    filament = fil.filaments[0]
-            except:
-                print("could not grab filament")
-                continue
+                current_measurement.ConstructLongestPathMask()
                 
-            self.current_images = {"processed": self.processed_image, "contour": self.gradient, "threshed": opening, "raw": cv2.cvtColor(raw[i], cv2.COLOR_BGR2GRAY),  "full_skeleton": cv2.addWeighted((skeleton * 255).astype('uint8'), 0.65, self.gradientOpen, 0.35, 0)}
-            fil_length_pixels = self.AssessFilament(filament)
-            fil_length = Cameras.ConvertPixelsToLength(fil_length_pixels)
-            print("frame: " + str(i), "fil length: " + str(fil_length), "pixels: " + str(fil_length_pixels))
             
-            extended_frames_path = os.path.join(frames_path, str(i) + str(self.format))
-            extended_frames_path2 = os.path.join(frames_path, "full_skeleton_" + str(i) + str(self.format))
-            cv2.imwrite(extended_frames_path, self.current_images["processed"])
-            cv2.imwrite(extended_frames_path2, self.current_images["full_skeleton"])
-            
-            # Save the data from the frame
-            self.filament_lengths.append((i, fil_length))
-            self.measurements[i] = {"length": fil_length, "images": self.current_images}
+                # filfinder
+                # trim branches below relative branch length as compared to total length
+                # get end pts, not branch points
+                # find the end_pt with the max distance (via dist_transform)
+                # this is the root branch
+                # Add branches by comparing relative orientation of the branch's end pts
+                    
+                
+                    
+                self.current_images = {"processed": current_measurement.processed_frame, "contour": current_measurement.contour, "raw": cv2.cvtColor(current_measurement.raw_frame, cv2.COLOR_BGR2GRAY),  "full_skeleton": cv2.addWeighted(current_measurement.skeleton, 0.65, current_measurement.contour, 0.35, 0)}
+                fil_length_pixels = self.AssessFilament(current_measurement.filament)
+                fil_length = Cameras.ConvertPixelsToLength(fil_length_pixels)
+                print("frame: " + str(i), "fil length: " + str(fil_length), "pixels: " + str(fil_length_pixels))
+                
+                extended_frames_path2 = os.path.join(frames_path, "full_skeleton_" + str(i) + str(self.format))
+                # cv2.imwrite(extended_frames_path, self.current_images["processed"])
+                cv2.imwrite(extended_frames_path2, self.current_images["full_skeleton"])
+                
+                # Save the data from the frame
+                self.filament_lengths.append((i, fil_length))
+                self.measurements[i] = {"length": fil_length, "images": self.current_images}
 
         MeasurerInstance.processingFrame = None
         
@@ -147,7 +125,7 @@ class MeasurerInstance():
             initial_list = [lens for i, lens in self.filament_lengths]
             self.length_avg = statistics.mean(initial_list)
             print("Avg length: " + str(self.length_avg))
-            print("y = {0}x + {1}".format(Cameras.conversion_slope, Cameras.conversion_intercept))
+            print("y = {0}x + {1}".format(Cameras.GetSlope(), Cameras.GetIntercept()))
             # print("Total list entries: " + str(initial_list.count()))
             
             refined_list = [(fil_length, self.measurements[i], i) for i, fil_length in self.filament_lengths if abs((fil_length - self.length_avg) / self.length_avg) <= 0.1]
@@ -279,84 +257,96 @@ class MeasurerInstance():
             # Just take the first point, they should all yield similar results if more than one
             other_point = pts_of_interest[0]
             slope = (y_pt - other_point[0]) / (x_pt -  other_point[1])
-
-            # Get the line equation passing through the end point
-            line_mask = np.zeros(dimensions)
-            b = y_pt - slope * x_pt
             
-            for x in range(dimensions[1]):
-                try:
-                    y_prev = round(slope * (x - 1) + b)
-                    y = round(slope * x + b)
-                    y_next = round(slope * (x + 1) + b)
-                    
+            if np.isinf(slope):
+                y_step = 1 if y_pt <= other_point[0] else -1
+                for y in range(y_pt, other_point[0], y_step):
                     if y < dimensions[0] - 1 and y >= 0:
-                        line_mask[y][x] = 1
+                        self.current_images["long_path"][y][x_pt] = 1
+            else:
+                # Get the line equation passing through the end point
+                b = y_pt - slope * x_pt
+                line_mask = np.zeros(dimensions)
+                
+                for x in range(dimensions[1]):
+                    try:
+                        y_prev = round(slope * (x - 1) + b)
+                        y = round(slope * x + b)
+                        y_next = round(slope * (x + 1) + b)
+                        
+                        if y < dimensions[0] - 1 and y >= 0:
+                            line_mask[y][x] = 1
+                        
+                        # Fill in as many pixels as needed to keep a continuous line,
+                        # keeping to a 50% tributary width (hence dividing by 2)
+                        # otherwise we have a dotted line
+                        if y_prev != y_next:
+                            y_start = y_prev + round((y - y_prev) / 2)
+                            y_end = y + round((y_next - y) / 2)
+                            
+                            y_step = 1 if y_start <= y_end else -1
+                            for y in range(y_start, y_end, y_step):
+                                if y < dimensions[0] - 1 and y >= 0:
+                                    line_mask[y][x] = 1
+                    except OverflowError:
+                        print("Infinity error")
+                        print("x: " + str(x) + "; slope: " + str(slope))
+                        continue
+                    except ValueError:
+                        print("Value error")
+                        print(type(slope))
+                        print(slope)
+                        
+                        continue
+            
+                # Find where the thresholded fish boundary and the line intersect
+                # There will be multiple points since the contour is not one-pixel thick
+                contour_array_normalized = np.round(self.current_images["contour"] / 255)
+                combined_array = np.add(line_mask, contour_array_normalized)
+                
+                pts_of_interest = list(zip(*np.where(combined_array > 1.5)))
+                reference = np.array([y_pt, x_pt])
+                
+                # Get minimum distance from end point to contour and add to filament
+                minimum_distance = None
+                min_point_set = None
+                for y, x in pts_of_interest:
+                    coord = np.array([y, x])
+                    dist = np.linalg.norm(coord - reference) # always >= 0
+                    if minimum_distance is None:
+                        minimum_distance = dist
+                        min_point_set = coord
+                    elif minimum_distance > dist:
+                        minimum_distance = dist
+                        min_point_set = coord
+                
+                # Fill in the skeletonized long path array with these extensions
+                step_size = 1 if x_pt <= min_point_set[1] else -1
+                for x in range(x_pt, min_point_set[1] + step_size, step_size):
+                    y_prev = round(slope * (x - step_size) + b)
+                    y = round(slope * x + b)
+                    y_next = round(slope * (x + step_size) + b)
                     
-                    # Fill in as many pixels as needed to keep a continuous line,
-                    # keeping to a 50% tributary width (hence dividing by 2)
-                    # otherwise we have a dotted line
+                    if min_point_set[0] >= y_pt:
+                        if y <= min_point_set[0] and y >= y_pt:
+                            self.current_images["long_path"][y][x] = 1
+                            # self.current_images["long_path"][1 - y][x] = 1
+                    else:
+                        if y <= y_pt and y >= min_point_set[0]:
+                            self.current_images["long_path"][y][x] = 1
+                        
                     if y_prev != y_next:
                         y_start = y_prev + round((y - y_prev) / 2)
                         y_end = y + round((y_next - y) / 2)
                         
                         y_step = 1 if y_start <= y_end else -1
                         for y in range(y_start, y_end, y_step):
-                            if y < dimensions[0] - 1 and y >= 0:
-                                line_mask[y][x] = 1
-                except OverflowError:
-                    print("Infinity error")
-                    print("x: " + str(x) + "; slope: " + str(slope))
-                    continue
-            
-            # Find where the thresholded fish boundary and the line intersect
-            # There will be multiple points since the contour is not one-pixel thick
-            contour_array_normalized = np.round(self.current_images["contour"] / 255)
-            combined_array = np.add(line_mask, contour_array_normalized)
-            
-            pts_of_interest = list(zip(*np.where(combined_array > 1.5)))
-            reference = np.array([y_pt, x_pt])
-            
-            # Get minimum distance from end point to contour and add to filament
-            minimum_distance = None
-            min_point_set = None
-            for y, x in pts_of_interest:
-                coord = np.array([y, x])
-                dist = np.linalg.norm(coord - reference) # always >= 0
-                if minimum_distance is None:
-                    minimum_distance = dist
-                    min_point_set = coord
-                elif minimum_distance > dist:
-                    minimum_distance = dist
-                    min_point_set = coord
-            
-            # Fill in the skeletonized long path array with these extensions
-            step_size = 1 if x_pt <= min_point_set[1] else -1
-            for x in range(x_pt, min_point_set[1] + step_size, step_size):
-                y_prev = round(slope * (x - step_size) + b)
-                y = round(slope * x + b)
-                y_next = round(slope * (x + step_size) + b)
-                
-                if min_point_set[0] >= y_pt:
-                    if y <= min_point_set[0] and y >= y_pt:
-                        self.current_images["long_path"][y][x] = 1
-                        # self.current_images["long_path"][1 - y][x] = 1
-                else:
-                    if y <= y_pt and y >= min_point_set[0]:
-                        self.current_images["long_path"][y][x] = 1
-                    
-                if y_prev != y_next:
-                    y_start = y_prev + round((y - y_prev) / 2)
-                    y_end = y + round((y_next - y) / 2)
-                    
-                    y_step = 1 if y_start <= y_end else -1
-                    for y in range(y_start, y_end, y_step):
-                        if min_point_set[0] >= y_pt:
-                            if y <= min_point_set[0] and y >= y_pt:
-                                self.current_images["long_path"][y][x] = 1
-                        else:
-                            if y <= y_pt and y >= min_point_set[0]:
-                                self.current_images["long_path"][y][x] = 1
+                            if min_point_set[0] >= y_pt:
+                                if y <= min_point_set[0] and y >= y_pt:
+                                    self.current_images["long_path"][y][x] = 1
+                            else:
+                                if y <= y_pt and y >= min_point_set[0]:
+                                    self.current_images["long_path"][y][x] = 1
                     
         self.current_images["long_path"] = np.where(self.current_images["long_path"] > 1, 1, self.current_images["long_path"])   
         

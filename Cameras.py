@@ -12,14 +12,15 @@ from PIL import Image, ImageTk
 import cv2
 import time
 import threading
+import statistics
 
 class Cameras():
     currentCam = None
     global current_frame
     global binarized_frame
     global raw_frame
-    conversion_slope = None
-    conversion_intercept = None
+    slope_list = []
+    intercept_list = []
     
     def __init__(self, **kwargs):
         # converter for opencv bgr format
@@ -118,8 +119,8 @@ class Cameras():
             print("ERROR")
             Cameras.connected = False # will automatically shut down app in constructor
     
-    def TriggerSkeletonize():
-        Cameras.active_measurer.SkeletonizeFrames(Cameras.GetFixedNumFrames(Cameras.number_of_frames))
+    def TriggerAnalysis():
+        Cameras.active_measurer.Analyze(Cameras.GetFixedNumFrames(Cameras.number_of_frames))
     
     def SetNewFrame(frame):
         global current_frame
@@ -161,12 +162,26 @@ class Cameras():
     
     @staticmethod
     def ConvertPixelsToLength(pixels):
-        return Cameras.conversion_slope * pixels + Cameras.conversion_intercept
+        return Cameras.GetSlope() * pixels + Cameras.GetIntercept()
 
     @staticmethod
     def ConvertLengthToPixels(length):
-        return (length - Cameras.conversion_intercept) / Cameras.conversion_slope
-
+        return (length - Cameras.GetIntercept()) / Cameras.GetSlope()
+    
+    @staticmethod
+    def GetSlope():
+        if Cameras.slope_list:
+            return statistics.mean(Cameras.slope_list)
+        else:
+            return None
+    
+    @staticmethod
+    def GetIntercept():
+        if Cameras.intercept_list:
+            return statistics.mean(Cameras.intercept_list)
+        else:
+            return None
+    
     def UpdateCamera(fishID=None, addText=None):
         if current_frame is not None:
             img = current_frame
@@ -212,8 +227,12 @@ class Cameras():
                     min_pixel_dist = min(distances)
                     max_id = max(ids)
                     min_id = min(ids)
-                    Cameras.conversion_slope = (max_id-min_id) / (max_pixel_dist-min_pixel_dist)
-                    Cameras.conversion_intercept = max_id-Cameras.conversion_slope*max_pixel_dist
+                    
+                    temp_slope = (max_id-min_id) / (max_pixel_dist-min_pixel_dist) 
+                    Cameras.slope_list.append(temp_slope)
+                    
+                    temp_intercept = max_id-temp_slope*max_pixel_dist
+                    Cameras.intercept_list.append(temp_intercept)
             
             img = cv2.resize(img, None, fy=.39, fx=.39)
             

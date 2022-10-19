@@ -281,7 +281,7 @@ class ConstructApp():
         
         # Loop to ensure calibration before training background
         def CheckIfCalibrated():
-            if Cameras.conversion_slope is not None and Cameras.conversion_intercept is not None:
+            if Cameras.GetSlope() is not None and Cameras.GetIntercept() is not None:
                 self.backgroundButton["text"] = "TRAIN"
                 self.backgroundButton["state"] = "normal"
                 self.backgroundButton.configure(bg = "#74B224")
@@ -380,7 +380,7 @@ class ConstructApp():
         self.measurer.outputFolder = ConstructApp.folder_path.get()
         self.measurer.format = ConstructApp.outputFormatVariable.get()
         
-        skeletonThread = threading.Thread(target=Cameras.TriggerSkeletonize, daemon=True)
+        skeletonThread = threading.Thread(target=Cameras.TriggerAnalysis, daemon=True)
         skeletonThread.start()
     
         self.startButton.after(1000, self.ReinstateSetting, skeletonThread)
