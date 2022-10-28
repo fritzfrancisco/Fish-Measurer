@@ -1,15 +1,10 @@
 from Cameras import Cameras
 import cv2
 import numpy as np
-from fil_finder import FilFinder2D
-import astropy.units as u
 import statistics
 import os
 from datetime import datetime
-from skimage import img_as_bool
-from skimage.morphology import medial_axis, binary_closing, binary_opening
 import pandas as pd
-import matplotlib.pyplot as plt
 
 from Measurement import Measurement
 
@@ -19,15 +14,11 @@ class MeasurerInstance():
         self.outputFolder = outputFolder
         self.format = format
         self.background = None
-        self.filament_lengths = []
-        self.length_avg = None
-        self.stdev = None
         MeasurerInstance.threshold = None 
         MeasurerInstance.fishID = None
         MeasurerInstance.addText = None
-        MeasurerInstance.processingFrame = None
         MeasurerInstance.error = (False, None)
-        MeasurerInstance.dist_transform = None
+        MeasurerInstance.processingFrame = None
 
         Cameras.ConnectMeasurer(self)
 
@@ -55,7 +46,7 @@ class MeasurerInstance():
         return self.im_bw
         
     def TrainBackground(self):
-        (background_images, empty) = Cameras.GetFixedNumFrames(Cameras.framerate * 3)
+        (background_images, empty) = Cameras.GetFixedNumFrames(Cameras.framerate * 1)
         self.fgbg = cv2.createBackgroundSubtractorMOG2()
         for image in background_images:
             fgmask = self.fgbg.apply(image)
@@ -63,10 +54,7 @@ class MeasurerInstance():
         self.background = fgmask
     
     def Analyze(self, frames):
-        self.measurements = {}
-        self.current_images = {}
-        self.filament_lengths = []
-        
+        self.measurements = []
         (raw, binarized) = frames
         
         # Create the destination folder
@@ -85,90 +73,82 @@ class MeasurerInstance():
         if not os.path.isdir(frames_path):
             os.mkdir(frames_path)
         
-        # Run through each frame
+        # Run through each frame and process it
         for i in range(len(raw)):
+            MeasurerInstance.processingFrame = i
             current_measurement = Measurement(i, raw[i], binarized[i])
             
             if current_measurement.successful_init:
                 extended_frames_path = os.path.join(frames_path, str(i) + str(self.format))
                 cv2.imwrite(extended_frames_path, current_measurement.skeleton)
                 
-                current_measurement.ConstructLongestPathMask()
-                
-            
-                # filfinder
-                # trim branches below relative branch length as compared to total length
-                # get end pts, not branch points
-                # find the end_pt with the max distance (via dist_transform)
-                # this is the root branch
-                # Add branches by comparing relative orientation of the branch's end pts
-                    
-                
-                    
-                self.current_images = {"processed": current_measurement.processed_frame, "contour": current_measurement.contour, "raw": cv2.cvtColor(current_measurement.raw_frame, cv2.COLOR_BGR2GRAY),  "full_skeleton": cv2.addWeighted(current_measurement.skeleton, 0.65, current_measurement.contour, 0.35, 0)}
-                fil_length_pixels = self.AssessFilament(current_measurement.filament)
-                fil_length = Cameras.ConvertPixelsToLength(fil_length_pixels)
-                print("frame: " + str(i), "fil length: " + str(fil_length), "pixels: " + str(fil_length_pixels))
-                
-                extended_frames_path2 = os.path.join(frames_path, "full_skeleton_" + str(i) + str(self.format))
-                # cv2.imwrite(extended_frames_path, self.current_images["processed"])
-                cv2.imwrite(extended_frames_path2, self.current_images["full_skeleton"])
-                
-                # Save the data from the frame
-                self.filament_lengths.append((i, fil_length))
-                self.measurements[i] = {"length": fil_length, "images": self.current_images}
+                # Add it to the pool if successful
+                if current_measurement.ConstructLongestPath():
+                    self.measurements.append(current_measurement)
+                    print("Frame: {0}; length (pix): {1}; length (cm): {2}".format(i, current_measurement.fil_length_pixels, Cameras.ConvertPixelsToLength(current_measurement.fil_length_pixels)))
 
+                    skeleton_frames_path = os.path.join(frames_path, "full_skeleton_{0}{1}".format(i, self.format))
+                    cv2.imwrite(skeleton_frames_path, current_measurement.skeleton_contour)
+                    
+        # For Tkinter ReinstateSettings()                    
         MeasurerInstance.processingFrame = None
         
-        # Remove outliers
-        if self.filament_lengths:
-            initial_list = [lens for i, lens in self.filament_lengths]
-            self.length_avg = statistics.mean(initial_list)
-            print("Avg length: " + str(self.length_avg))
-            print("y = {0}x + {1}".format(Cameras.GetSlope(), Cameras.GetIntercept()))
-            # print("Total list entries: " + str(initial_list.count()))
+        # Remove outliers & perform group-wide statistics
+        if self.measurements:
+            print("\ny = {0:.2f}x + {1:.2f}".format(Cameras.GetSlope(), Cameras.GetIntercept()))
             
-            refined_list = [(fil_length, self.measurements[i], i) for i, fil_length in self.filament_lengths if abs((fil_length - self.length_avg) / self.length_avg) <= 0.1]
+            # Get the average length of all successful instances
+            initial_list = [instance.fil_length_pixels for instance in self.measurements]
+            avg_length = statistics.mean(initial_list)
+            print("Avg length: {0:.2f}".format(avg_length))
+            
+            # Only retain any given measurement if its length is within 10% error of the average
+            refined_list = [instance for instance in self.measurements if abs((instance.fil_length_pixels - avg_length) / avg_length) <= 0.1]
             MeasurerInstance.trial_count = len(refined_list)
-            split_list = [list(t) for t in zip(*refined_list)]
             print("Refined list entries: " + str(MeasurerInstance.trial_count))
             
-            if not split_list:
+            if not refined_list:
                 print("All lengths filtered out!")
                 MeasurerInstance.error = (True, "The lengths obtained are too variant to be consolidated. The data will not be saved, please re-measure")
             else:
-                self.length_stats = (statistics.mean(split_list[0]), statistics.stdev(split_list[0]))
+                self.length_stats = (statistics.mean([instance.fil_length_pixels for instance in self.measurements]), statistics.stdev([instance.fil_length_pixels for instance in self.measurements]))
                 
-                df = pd.DataFrame(data={"frame_number": split_list[2], "length_mm": split_list[0]})
+                # Export the data to .csv
+                df = pd.DataFrame(data={"frame_number": [instance.process_id for instance in self.measurements], "length_pix": [instance.fil_length_pixels for instance in self.measurements], "length_cm": [Cameras.ConvertPixelsToLength(instance.fil_length_pixels) for instance in self.measurements]})
                 df.to_csv(os.path.join(target_folder_name, "data-output.csv"), sep=';',index=False) 
                 
-                # find the instance with the closest length value
+                # Find the instance with the closest length value
                 try:
-                    local_index = split_list[0].index(min(split_list[0], key=lambda x:abs(x-self.length_stats[0])))
+                    local_index = [instance.fil_length_pixels for instance in self.measurements].index(min([instance.fil_length_pixels for instance in self.measurements], key=lambda x:abs(x-self.length_stats[0])))
                     
-                    closest_instance = split_list[1][local_index]
-                    closest_index = split_list[2][local_index]
+                    closest_instance = [instance for instance in self.measurements][local_index]
+                    closest_index = closest_instance.process_id
                 except (KeyError):
                     MeasurerInstance.error = (True, "There was an error processing the obtained data. The data wsa not saved, please try again")
                 
-                print("\nFinal: " + str(self.length_stats[0]) + "; " + str(closest_index))
-                chosen_image = MeasurerInstance.WatermarkImage(closest_instance, closest_index, self.length_stats)
+                print("\nFINAL\nAvg pix: {0:.2f}; Avg cm: {2:.2f}; Closest ID: {1}".format(self.length_stats[0],closest_index, Cameras.ConvertPixelsToLength(self.length_stats[0])))
                 
-                # Save it and open it
-                state = cv2.imwrite(os.path.join(target_folder_name, "closest-image" + str(self.format)), chosen_image)
+                # Save principal image
+                chosen_image = MeasurerInstance.WatermarkImage(closest_instance, self.length_stats)
+                cv2.imwrite(os.path.join(target_folder_name, "closest-image" + str(self.format)), chosen_image)
+                
+                # Watermark and save all subsequent images
+                for instance in self.measurements:
+                    watermarked_image = MeasurerInstance.GenericWatermark(instance)
+                    cv2.imwrite(os.path.join(target_folder_name, "watermarked-{0}{1}".format(instance.process_id, self.format)), watermarked_image)
+                    
         else:
             MeasurerInstance.error = (True, "The length values could not be obtained from the image. Either the blob was too small and filtered out, or the skeletonization process was too complex. Please try again")
                 
-    def WatermarkImage(closest_instance, closest_index, length_stats):
+    def WatermarkImage(closest_instance, length_stats):
         # Watermark the results
-        chosen_image = cv2.putText(closest_instance["images"]["processed"], 
-                                    "Length: " +  "{:.2f}".format(length_stats[0]) + "cm (" + \
-                                    "{:.2f}".format(closest_instance["length"]) + "cm)" + \
-                                    " +/- " + "{:.2f}".format(length_stats[1]) + "cm", 
-                                    (15, closest_instance["images"]["processed"].shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
+        chosen_image = cv2.putText(closest_instance.processed_frame, 
+                                    "Avg Length: {0:.2f}cm +/- {1:.2f}cm (This: {2:.2f}cm)".format(Cameras.ConvertPixelsToLength(length_stats[0]),
+                                                                                                   Cameras.ConvertPixelsToLength(length_stats[1]), 
+                                                                                                   Cameras.ConvertPixelsToLength(closest_instance.fil_length_pixels)), 
+                                    (15, closest_instance.processed_frame.shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
-        chosen_image = cv2.putText(chosen_image, 
-                                    "{0}".format(MeasurerInstance.trial_count) +  " images",
+        chosen_image = cv2.putText(chosen_image, "{0} images".format(MeasurerInstance.trial_count),
                                     (15, chosen_image.shape[0]-120), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
         # Add metadata
@@ -186,175 +166,25 @@ class MeasurerInstance():
         
         return chosen_image
     
-    def AssessFilament(self, filament):
-        dimensions = np.shape(self.current_images["contour"])
+    def GenericWatermark(instance):
+        chosen_image = cv2.putText(instance.processed_frame, 
+                                    "Length: {0:.2f}cm)".format(Cameras.ConvertPixelsToLength(instance.fil_length_pixels)), 
+                                    (15, instance.processed_frame.shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
-        fil_length = filament.length(u.pix).value
-        added_dist = 0
+        # Add metadata
+        chosen_image = cv2.putText(chosen_image, datetime.now().strftime("%d.%m.%Y %H:%M:%S"), (15, 70), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
-        # Get the pixels on the longpath and all the [many] branch endpoints
-        # the longpath pixels are not in order, and so we need to find the
-        # endpoints of this path manually --> really annoying
-        longpath_pixel_coords = filament.longpath_pixel_coords
-        longpath_pixel_coords_array = np.asarray(longpath_pixel_coords)
-        long_zipped = list(zip(longpath_pixel_coords[0], longpath_pixel_coords[1]))
-        
-        # Gets the end points of the entire non-pruned filament
-        end_pt_coords = filament.end_pts
-        
-        end_candidates = []
-        list_max = 1000000
-        for pt in end_pt_coords:
-            # Get the distance from each endpoint to all other points on the longpath
-            pt_array = np.asarray(pt).reshape((2,1))
-            dist_mat = np.linalg.norm(np.subtract(longpath_pixel_coords_array, pt_array), axis=0)
+        if MeasurerInstance.fishID != None and MeasurerInstance.fishID != '':
+            chosen_image = cv2.putText(chosen_image, "Fish ID: " + MeasurerInstance.fishID, (15, 160), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
 
-            # The actual endpoints will be very close to (even on top of) at least one
-            # of the points on the long path
-            min_dist = np.amin(dist_mat)
-            if len(end_candidates) < 2:
-                end_candidates.append((pt, min_dist))
-                list_max = max([dist for coord, dist in end_candidates])
-            else:
-                if min_dist < list_max:
-                    pop_index = [dist for coord, dist in end_candidates].index(list_max)
-                    end_candidates.pop(pop_index)
-                    end_candidates.append((pt, min_dist))
-                    list_max = max([dist for coord, dist in end_candidates])
-                    
-        ## There might be others with 0 distance (ie, at the -1 pixels position). Need to consider
-        ## for now leave it, the user can restart
-        end_pts = [coord for coord, dist in end_candidates]
+        if MeasurerInstance.addText != None and MeasurerInstance.addText != '':
+            text = MeasurerInstance.addText
+            y0, dy = 250, 75
+            for i, line in enumerate(text.split('\n')):
+                y = y0 + i*dy
+                chosen_image = cv2.putText(chosen_image, line, (15, y), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
-        # Fill in the image matrices
-        longest_path_mat = np.zeros(dimensions)
-        for y, x in long_zipped:
-            longest_path_mat[y-1][x-1] = 1
-        self.current_images["long_path"] = longest_path_mat
-        
-        # Run the intersection exercise for each end point to determine
-        # the path to add
-        for y_pt, x_pt in end_pts:
-            distance = MeasurerInstance.dist_transform[y_pt][x_pt]
-            fil_length += distance
-            added_dist += distance
-            print("distance_transform: " + str(distance))
-            
-            # Start with the appropriate slope for the line mask
-            circle_mask = np.zeros(dimensions)
-            circle_radius = 20
-            for x in range(x_pt - circle_radius, x_pt + circle_radius + 1):
-                for y in range(y_pt - circle_radius, y_pt + circle_radius + 1):
-                    if x <= dimensions[1] - 1 and x >= 0:
-                        if y <= dimensions[0] - 1 and y >= 0:
-                            ref_val = ((x-x_pt)**2 + (y-y_pt)**2)**(0.5)
-                            if ref_val >= 19.3 and ref_val <= 20.7:
-                                circle_mask[y][x] = 1
-            
-            combined_array = np.add(circle_mask, longest_path_mat)
-            pts_of_interest = list(zip(*np.where(combined_array > 1.5)))
-            
-            # Just take the first point, they should all yield similar results if more than one
-            other_point = pts_of_interest[0]
-            slope = (y_pt - other_point[0]) / (x_pt -  other_point[1])
-            
-            if np.isinf(slope):
-                y_step = 1 if y_pt <= other_point[0] else -1
-                for y in range(y_pt, other_point[0], y_step):
-                    if y < dimensions[0] - 1 and y >= 0:
-                        self.current_images["long_path"][y][x_pt] = 1
-            else:
-                # Get the line equation passing through the end point
-                b = y_pt - slope * x_pt
-                line_mask = np.zeros(dimensions)
-                
-                for x in range(dimensions[1]):
-                    try:
-                        y_prev = round(slope * (x - 1) + b)
-                        y = round(slope * x + b)
-                        y_next = round(slope * (x + 1) + b)
-                        
-                        if y < dimensions[0] - 1 and y >= 0:
-                            line_mask[y][x] = 1
-                        
-                        # Fill in as many pixels as needed to keep a continuous line,
-                        # keeping to a 50% tributary width (hence dividing by 2)
-                        # otherwise we have a dotted line
-                        if y_prev != y_next:
-                            y_start = y_prev + round((y - y_prev) / 2)
-                            y_end = y + round((y_next - y) / 2)
-                            
-                            y_step = 1 if y_start <= y_end else -1
-                            for y in range(y_start, y_end, y_step):
-                                if y < dimensions[0] - 1 and y >= 0:
-                                    line_mask[y][x] = 1
-                    except OverflowError:
-                        print("Infinity error")
-                        print("x: " + str(x) + "; slope: " + str(slope))
-                        continue
-                    except ValueError:
-                        print("Value error")
-                        print(type(slope))
-                        print(slope)
-                        
-                        continue
-            
-                # Find where the thresholded fish boundary and the line intersect
-                # There will be multiple points since the contour is not one-pixel thick
-                contour_array_normalized = np.round(self.current_images["contour"] / 255)
-                combined_array = np.add(line_mask, contour_array_normalized)
-                
-                pts_of_interest = list(zip(*np.where(combined_array > 1.5)))
-                reference = np.array([y_pt, x_pt])
-                
-                # Get minimum distance from end point to contour and add to filament
-                minimum_distance = None
-                min_point_set = None
-                for y, x in pts_of_interest:
-                    coord = np.array([y, x])
-                    dist = np.linalg.norm(coord - reference) # always >= 0
-                    if minimum_distance is None:
-                        minimum_distance = dist
-                        min_point_set = coord
-                    elif minimum_distance > dist:
-                        minimum_distance = dist
-                        min_point_set = coord
-                
-                # Fill in the skeletonized long path array with these extensions
-                step_size = 1 if x_pt <= min_point_set[1] else -1
-                for x in range(x_pt, min_point_set[1] + step_size, step_size):
-                    y_prev = round(slope * (x - step_size) + b)
-                    y = round(slope * x + b)
-                    y_next = round(slope * (x + step_size) + b)
-                    
-                    if min_point_set[0] >= y_pt:
-                        if y <= min_point_set[0] and y >= y_pt:
-                            self.current_images["long_path"][y][x] = 1
-                            # self.current_images["long_path"][1 - y][x] = 1
-                    else:
-                        if y <= y_pt and y >= min_point_set[0]:
-                            self.current_images["long_path"][y][x] = 1
-                        
-                    if y_prev != y_next:
-                        y_start = y_prev + round((y - y_prev) / 2)
-                        y_end = y + round((y_next - y) / 2)
-                        
-                        y_step = 1 if y_start <= y_end else -1
-                        for y in range(y_start, y_end, y_step):
-                            if min_point_set[0] >= y_pt:
-                                if y <= min_point_set[0] and y >= y_pt:
-                                    self.current_images["long_path"][y][x] = 1
-                            else:
-                                if y <= y_pt and y >= min_point_set[0]:
-                                    self.current_images["long_path"][y][x] = 1
-                    
-        self.current_images["long_path"] = np.where(self.current_images["long_path"] > 1, 1, self.current_images["long_path"])   
-        
-        longOpenGradient = cv2.addWeighted((self.current_images["long_path"] * 255).astype('uint8'),0.6,self.gradientOpen,0.4,0)
-        image = MeasurerInstance.ShowImage(self.current_images["processed"], cv2.cvtColor(longOpenGradient, cv2.COLOR_GRAY2RGB), name="binarized") 
-        self.current_images["processed"] = image
-        
-        return fil_length
+        return chosen_image
 
     def ShowImage(image1, image2, resize=0.5, name='Image', pausekey=False, show=False):
         image = cv2.addWeighted(image1,0.65,image2,0.35,0)

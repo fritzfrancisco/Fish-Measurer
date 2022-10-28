@@ -368,6 +368,7 @@ class ConstructApp():
             self.measurer = None
             
     def StartButton(self):
+        print("clicked START")
         self.backgroundButton["state"] = "disabled"
         self.startButton["state"] = "disabled"
         # ConstructApp.thresholdSetting.Activate(False)
@@ -394,6 +395,7 @@ class ConstructApp():
             
             self.startButton.after(1000, self.ReinstateSetting, thread)
         else:
+            print("reinstating settings")
             # ConstructApp.thresholdSetting.Activate(True)
             ConstructApp.numberFramesSetting.Activate(True)
             self.startButton["state"] = "normal"
