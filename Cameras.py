@@ -129,9 +129,9 @@ class Cameras():
         
         Cameras.lock.acquire()
         raw_frame = frame
-        if Cameras.active_measurer is not None and Cameras.active_measurer.background is not None:
+        if Cameras.active_measurer is not None and Cameras.active_measurer.background_is_trained:
             binarized_frame = Cameras.active_measurer.SubtractBackground(raw_frame)
-            current_frame = binarized_frame
+            current_frame = binarized_frame if binarized_frame is not None else frame
         else:
             binarized_frame = None
             current_frame = frame

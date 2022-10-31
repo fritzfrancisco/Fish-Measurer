@@ -1,5 +1,5 @@
 from Cameras import Cameras
-from app_constructor import ConstructApp
+from app_constructor import TkinterApp
 import sys
 import os
 from datetime import datetime
@@ -17,5 +17,7 @@ from datetime import datetime
 
 # Actual execution
 camera = Cameras()
-app = ConstructApp()
+app = TkinterApp()
+app.CheckIfCalibrated()
+app.StartCheckingForErrors()
 

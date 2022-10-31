@@ -9,15 +9,16 @@ import pandas as pd
 from Measurement import Measurement
 
 class MeasurerInstance():
-    def __init__(self, outputFolder, format):
+    def __init__(self):
         ## 26.35
-        self.outputFolder = outputFolder
-        self.format = format
-        self.background = None
+        self.outputFolder = None
+        self.format = None
+        self.background_is_trained = False
+        self.block_tkinter_start_button = False
         MeasurerInstance.threshold = None 
         MeasurerInstance.fishID = None
         MeasurerInstance.addText = None
-        MeasurerInstance.error = (False, None)
+        MeasurerInstance.errors = {key: [] for key in ["interrupt"]}
         MeasurerInstance.processingFrame = None
 
         Cameras.ConnectMeasurer(self)
@@ -34,24 +35,25 @@ class MeasurerInstance():
             
             self.im_bw = np.zeros(np.shape(fully_binarized)).astype('uint8')
             cv2.drawContours(self.im_bw, [biggestContour],-1,255,thickness=cv2.FILLED)
-            
-            if (MeasurerInstance.error[1] == "The threshold value is set too high and all blobs are being filtered out. Please lower it a bit"):
-                MeasurerInstance.error = (False, None)
+            self.block_tkinter_start_button = False
                 
         except ValueError as e:
+            self.block_tkinter_start_button = True
             print(str(type(e).__name__) + ": The biggestContour list is empty, no blobs are being picked up -->", e)
-            self.im_bw = fully_binarized
-            MeasurerInstance.error = (True, "The threshold value is set too high and all blobs are being filtered out. Please lower it a bit")
+            
+            return None
             
         return self.im_bw
         
     def TrainBackground(self):
+        self.pulling_background = True
         (background_images, empty) = Cameras.GetFixedNumFrames(Cameras.framerate * 1)
+        self.pulling_background = False
         self.fgbg = cv2.createBackgroundSubtractorMOG2()
         for image in background_images:
-            fgmask = self.fgbg.apply(image)
+            self.fgbg.apply(image)
             
-        self.background = fgmask
+        self.background_is_trained = True
     
     def Analyze(self, frames):
         self.measurements = []
@@ -108,8 +110,12 @@ class MeasurerInstance():
             print("Refined list entries: " + str(MeasurerInstance.trial_count))
             
             if not refined_list:
+                # Effectively interrupts the flow, the method ends after this block
                 print("All lengths filtered out!")
-                MeasurerInstance.error = (True, "The lengths obtained are too variant to be consolidated. The data will not be saved, please re-measure")
+                error_message = "The lengths obtained are too variant to be consolidated (the variance is too high). The data is unreliable and will not be saved, please re-measure"
+                
+                if error_message not in MeasurerInstance.errors["interrupt"]:
+                    MeasurerInstance.errors["interrupt"].append(error_message)
             else:
                 self.length_stats = (statistics.mean([instance.fil_length_pixels for instance in self.measurements]), statistics.stdev([instance.fil_length_pixels for instance in self.measurements]))
                 
@@ -118,13 +124,9 @@ class MeasurerInstance():
                 df.to_csv(os.path.join(target_folder_name, "data-output.csv"), sep=';',index=False) 
                 
                 # Find the instance with the closest length value
-                try:
-                    local_index = [instance.fil_length_pixels for instance in self.measurements].index(min([instance.fil_length_pixels for instance in self.measurements], key=lambda x:abs(x-self.length_stats[0])))
-                    
-                    closest_instance = [instance for instance in self.measurements][local_index]
-                    closest_index = closest_instance.process_id
-                except (KeyError):
-                    MeasurerInstance.error = (True, "There was an error processing the obtained data. The data wsa not saved, please try again")
+                local_index = [instance.fil_length_pixels for instance in self.measurements].index(min([instance.fil_length_pixels for instance in self.measurements], key=lambda x:abs(x-self.length_stats[0])))
+                closest_instance = [instance for instance in self.measurements][local_index]
+                closest_index = closest_instance.process_id
                 
                 print("\nFINAL\nAvg pix: {0:.2f}; Avg cm: {2:.2f}; Closest ID: {1}".format(self.length_stats[0],closest_index, Cameras.ConvertPixelsToLength(self.length_stats[0])))
                 
@@ -138,7 +140,11 @@ class MeasurerInstance():
                     cv2.imwrite(os.path.join(target_folder_name, "watermarked-{0}{1}".format(instance.process_id, self.format)), watermarked_image)
                     
         else:
-            MeasurerInstance.error = (True, "The length values could not be obtained from the image. Either the blob was too small and filtered out, or the skeletonization process was too complex. Please try again")
+            # Effectively interrupts the flow, the method ends after this block
+            error_message = "No length values could be obtained from the collected images. Either the blob was too small and filtered out, or the skeletonization process was too complex and failed. Please try again"
+                
+            if error_message not in MeasurerInstance.errors["interrupt"]:
+                MeasurerInstance.errors["interrupt"].append(error_message)
                 
     def WatermarkImage(closest_instance, length_stats):
         # Watermark the results

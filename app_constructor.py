@@ -9,8 +9,32 @@ import math
 import sys
 import threading
 
-class ConstructApp():
+class TkinterApp():
     def __init__(self, **kwargs):
+        
+        # Error handling
+        self.block_start_already_popped = False
+        self.interrupt_already_popped = False
+        
+        # The state of execution of the app
+            ## 0: base state
+            ## 1: background is trained
+            ## 2: running analysis
+        self.current_state = 0
+        
+        # Principal components
+        self.startButton = None
+        self.backgroundButton = None
+        
+        ## consider removing all unnecessary class variables
+        
+        
+        
+        
+        
+        
+        
+        
         # Create the app
         rootWindow = tk.Tk()
         rootWindow.geometry("1133x850")
@@ -34,8 +58,8 @@ class ConstructApp():
         paneeli_image.pack(fill=tk.BOTH, expand=True)
         
         def UpdateFeed():
-            fishID = ConstructApp.fishIDEntry.get()
-            addText = ConstructApp.additionalText.get("1.0",'end-1c')
+            fishID = TkinterApp.fishIDEntry.get()
+            addText = TkinterApp.additionalText.get("1.0",'end-1c')
             
             # Update the measurer
             MeasurerInstance.fishID = fishID
@@ -105,7 +129,7 @@ class ConstructApp():
         self.inputsFrame.columnconfigure(1, weight=1)
 
         # Settings inputs
-        ConstructApp.exposureSetting = DigitEntry("Exposure (ms): ", 100, 0, self.inputsFrame, trace="exposure")
+        TkinterApp.exposureSetting = DigitEntry("Exposure (ms): ", 100, 0, self.inputsFrame, trace="exposure")
         
         def SendGain(selection):
             ## error handling for failure? Tkinter pop-up
@@ -118,10 +142,10 @@ class ConstructApp():
         "Continuous",
         "Off"
         ]
-        ConstructApp.gainVariable = StringVar()
-        ConstructApp.gainVariable.set(GAINOPTIONS[0]) # default value
+        TkinterApp.gainVariable = StringVar()
+        TkinterApp.gainVariable.set(GAINOPTIONS[0]) # default value
         SendGain(GAINOPTIONS[0])
-        w = OptionMenu(self.inputsFrame, ConstructApp.gainVariable, *GAINOPTIONS, command=SendGain)
+        w = OptionMenu(self.inputsFrame, TkinterApp.gainVariable, *GAINOPTIONS, command=SendGain)
         w["highlightthickness"] = 0
         w.grid(row = 1, column = 1, sticky='ew', padx=5)
         gainSetting.grid(row = 1, column = 0, sticky='w', padx=5)
@@ -137,15 +161,15 @@ class ConstructApp():
         "Continuous",
         "Off"
         ]
-        ConstructApp.wb_variable = StringVar()
-        ConstructApp.wb_variable.set(WBOPTIONS[2]) # default value
+        TkinterApp.wb_variable = StringVar()
+        TkinterApp.wb_variable.set(WBOPTIONS[2]) # default value
         SendWB(WBOPTIONS[2])
-        w = OptionMenu(self.inputsFrame, ConstructApp.wb_variable, *WBOPTIONS, command=SendWB)
+        w = OptionMenu(self.inputsFrame, TkinterApp.wb_variable, *WBOPTIONS, command=SendWB)
         w["highlightthickness"] = 0
         w.grid(row = 2, column = 1, sticky='ew', padx=5)
         white_balance_setting.grid(row = 2, column = 0, sticky='w', padx=5)
         
-        ConstructApp.frameRateSetting = DigitEntry("Framerate (fps): ", 30, 3, self.inputsFrame, trace="framerate")
+        TkinterApp.frameRateSetting = DigitEntry("Framerate (fps): ", 30, 3, self.inputsFrame, trace="framerate")
 
         ## -- OUTPUT SETTINGS -----------------------------------------------------------------------------------------------
         outputFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=2, pady=10, bg="grey80")
@@ -176,15 +200,15 @@ class ConstructApp():
         def BrowseButton():
             folderName = filedialog.askdirectory()
             if folderName:
-                ConstructApp.folder_path.set(folderName)
+                TkinterApp.folder_path.set(folderName)
                 print(folderName)
             
-        ConstructApp.button = tk.Button(browseFrame, text='Browse...', command=BrowseButton)
-        ConstructApp.button.grid(row=0, column=0, sticky="nsew")
+        TkinterApp.button = tk.Button(browseFrame, text='Browse...', command=BrowseButton)
+        TkinterApp.button.grid(row=0, column=0, sticky="nsew")
 
-        ConstructApp.folder_path = StringVar()
-        ConstructApp.folder_path.set(os.getcwd())
-        selectedFolder = Label(master=browseFrame, textvariable=ConstructApp.folder_path, width=31, anchor='e')
+        TkinterApp.folder_path = StringVar()
+        TkinterApp.folder_path.set(os.getcwd())
+        selectedFolder = Label(master=browseFrame, textvariable=TkinterApp.folder_path, width=31, anchor='e')
         selectedFolder.grid(row=0, column=1, sticky="nsew")
 
         # File format selector
@@ -202,11 +226,11 @@ class ConstructApp():
         ".png",
         ".tiff"
         ]
-        ConstructApp.outputFormatVariable = StringVar()
-        ConstructApp.outputFormatVariable.set(OPTIONS[0]) # default value
-        ConstructApp.w = OptionMenu(formatFrame, ConstructApp.outputFormatVariable, *OPTIONS)
-        ConstructApp.w["highlightthickness"] = 0
-        ConstructApp.w.grid(row = 0, column = 1, sticky='ew', padx=5, pady=5)
+        TkinterApp.outputFormatVariable = StringVar()
+        TkinterApp.outputFormatVariable.set(OPTIONS[0]) # default value
+        TkinterApp.w = OptionMenu(formatFrame, TkinterApp.outputFormatVariable, *OPTIONS)
+        TkinterApp.w["highlightthickness"] = 0
+        TkinterApp.w.grid(row = 0, column = 1, sticky='ew', padx=5, pady=5)
 
         # Fish ID and freetext
         watermarkFrame = tk.Frame(master=outputSettingsFrame, relief='flat', borderwidth=2, bg="grey60", padx=5, pady=2)
@@ -219,9 +243,9 @@ class ConstructApp():
         fishIDFrame.pack(fill=tk.X, pady=3)
 
         fishID = tk.Label(text="Fish ID: ", master=fishIDFrame, pady=3)
-        ConstructApp.fishIDEntry = tk.Entry(fishIDFrame, justify='left') 
+        TkinterApp.fishIDEntry = tk.Entry(fishIDFrame, justify='left') 
         fishID.grid(row = 0, column = 0, sticky='w', padx=5)
-        ConstructApp.fishIDEntry.grid(row = 0, column = 1, sticky='ew', padx=5)
+        TkinterApp.fishIDEntry.grid(row = 0, column = 1, sticky='ew', padx=5)
 
         ## Freetext
         freetextFrame = tk.Frame(master=watermarkFrame, relief='flat', borderwidth=2, padx=5)
@@ -231,14 +255,14 @@ class ConstructApp():
         freetextPrompt.config(font=("Courier", 10))
         freetextPrompt.pack(fill=tk.X)
 
-        ConstructApp.additionalText = tk.Text(freetextFrame, height=5, width=5)
-        ConstructApp.additionalText.pack(fill=tk.X, pady=5)
+        TkinterApp.additionalText = tk.Text(freetextFrame, height=5, width=5)
+        TkinterApp.additionalText.pack(fill=tk.X, pady=5)
         
         ## -- BG BUTTON -----------------------------------------------------------------------------------
         backgroundFrame = tk.Frame(master=settingsFrame, relief='flat', borderwidth=2, padx=10, pady=10, bg="grey80")
         backgroundFrame.pack(fill=tk.BOTH)
         
-        self.backgroundButton = tk.Button(backgroundFrame, text='TRAIN', command=self.BackgroundButton, bg="#74B224", font=("Courier", 24), fg="white", disabledforeground="white")
+        self.backgroundButton = tk.Button(backgroundFrame, text='TRAIN', command=self.BackgroundButtonClick, bg="#74B224", font=("Courier", 24), fg="white", disabledforeground="white")
         self.backgroundButton.pack(fill=tk.BOTH)
 
         ## -- START BUTTON -----------------------------------------------------------------------------------
@@ -272,26 +296,12 @@ class ConstructApp():
                         command=ShowChoice,
                         value=val).grid(row = 0, column = val, sticky='ew', padx=5)  
         
-        ConstructApp.numberFramesSetting = DigitEntry("Number of Frames: ", 3, 1, innerStartFrame, trace="numberFrames", lower=0)
+        TkinterApp.numberFramesSetting = DigitEntry("Number of Frames: ", 3, 1, innerStartFrame, trace="numberFrames", lower=0)
     
-        self.startButton = tk.Button(startFrame, text='START', command=self.StartButton, bg="grey50", font=("Courier", 24), fg="white", state="disabled", disabledforeground="white")
+        self.startButton = tk.Button(startFrame, text='START', command=self.StartButtonClick, bg="grey50", font=("Courier", 24), fg="white", state="disabled", disabledforeground="white")
         self.startButton.pack(fill=tk.BOTH, pady=5)
         
         paneeli_image.after(15, UpdateFeed) 
-        
-        # Loop to ensure calibration before training background
-        def CheckIfCalibrated():
-            if Cameras.GetSlope() is not None and Cameras.GetIntercept() is not None:
-                self.backgroundButton["text"] = "TRAIN"
-                self.backgroundButton["state"] = "normal"
-                self.backgroundButton.configure(bg = "#74B224")
-            else:
-                self.backgroundButton["text"] = "PLS CALIBRATE"
-                self.backgroundButton["state"] = "disabled"
-                self.backgroundButton.configure(bg = "grey50")
-                self.backgroundButton.after(500, CheckIfCalibrated)
-            
-        self.backgroundButton.after(15, CheckIfCalibrated)
         
         def on_closing():
             sys.stdout.close()
@@ -299,112 +309,163 @@ class ConstructApp():
 
         rootWindow.protocol("WM_DELETE_WINDOW", on_closing)
         rootWindow.mainloop()
-    
-    def ButtonTextCountDown(self, label, thread):
-        self.backgroundButton["text"] = str(label)
+        
+        
+        
+        
+        
+        
+        
+    def CheckIfCalibrated(self):
+        # Loop to ensure calibration before training background
+        if Cameras.GetSlope() is not None and Cameras.GetIntercept() is not None:
+            self.ActivateBackgroundButton(True)
+        else:
+            self.backgroundButton["text"] = "PLS CALIBRATE"
+            self.ActivateBackgroundButton(False)
+            self.backgroundButton.after(500, self.CheckIfCalibrated)
+        
+    def BackgroundButtonProcessing(self, label, thread):
+        self.backgroundButton["text"] = label
 
         if not thread.is_alive():
-            self.backgroundButton["text"] = "RESTART"
-            self.backgroundButton["state"] = "normal"
-            self.backgroundButton.configure(bg = "#185CA8")
-            
-            self.startButton["state"] = "normal"
-            self.startButton.configure(bg = "#74B224")
+            self.current_state = 1
+            self.ActivateBackgroundButton(True)
+            self.ActivateStartButton(True)
+        
+        if not self.measurer_instance.pulling_background and label[0] != "P":
+            self.backgroundButton.after(1000, self.BackgroundButtonProcessing, "Processing", thread)
         else:
-            if (isinstance(label, int) or isinstance(label, float)) and label != 0:
-                self.backgroundButton.after(1000, self.ButtonTextCountDown, label-1, thread)
+            if label[-3:] == "...":
+                self.backgroundButton.after(1000, self.BackgroundButtonProcessing, label[:-3], thread)
             else:
-                self.backgroundButton.after(1000, self.ButtonTextCountDown, "...", thread)
+                self.backgroundButton.after(1000, self.BackgroundButtonProcessing, label + ".", thread)
                 
-    def BackgroundButtonsActive(self, status):
-        if status:
-            self.backgroundButton["state"] = "normal"
+    def StartCheckingForErrors(self):
+        # INTERRUPTION ERRORS
+        ## There will only ever be one at a time, as interruption errors end the analysis and 
+        ## therefore architecturally preclude the raising of additional interruption errors.
+        ## App should resume normal functionality as the analysis thread will close cleanly
+        if self.measurer_instance.errors["interrupt"]:
+            # Don't raise the pop-up if it's already been raised for this event
+            if not self.interrupt_already_popped:
+                self.interrupt_already_popped = True
+                tk.messagebox.showerror("Analysis Error", self.measurer_instance.errors["interrupt"][0])
+                self.measurer_instance.errors["interrupt"] = []
+        else:
+            self.interrupt_already_popped = False
+        
+        # START-BLOCK ERRORS
+        if self.measurer_instance.block_tkinter_start_button:
+            self.ActivateStartButton(False)
+            
+            # Don't raise the pop-up if it's already been raised for this event
+            if not self.block_start_already_popped:
+                self.block_start_already_popped = True
+                tk.messagebox.showerror("Shape is Missing!", "Failing to register any objects in the arena (quite the feat). Please ensure an object is present and contrasted against the trained background")
+        else:
+            self.ActivateStartButton(True)
+            self.block_start_already_popped = False
+            
+        self.backgroundButton.after(100, self.StartCheckingForErrors)
+    
+    def ActivateStartButton(self, activate):
+        if activate:
+            if self.current_state == 0:
+                self.startButton.configure(bg="grey50", state="disabled")
+            elif self.current_state == 1:
+                self.startButton.configure(bg="#74B224", state="normal")
+            elif self.current_state == 2:
+                self.startButton.configure(bg="grey50", state="disabled")
+        else:
+            self.startButton.configure(bg="grey50", state="disabled")
+    
+    def ActivateBackgroundButton(self, activate):
+        if activate:
+            if self.current_state == 0:
+                self.backgroundButton.configure(text='TRAIN', bg="#74B224", state="normal")
+            elif self.current_state == 1:
+                self.backgroundButton.configure(text='RESTART', bg ="#185CA8", state="normal")
+            elif self.current_state == 2:
+                self.backgroundButton.configure(bg="grey50", state="disabled")
+        else:
+            self.backgroundButton.configure(bg="grey50", state="disabled")
+            
+    def LockSettings(self, lock):
+        if not lock:
+            self.ActivateBackgroundButton(True)
             self.cam_choice_dropdown["state"] = "normal"
             for child in self.inputsFrame.winfo_children():
                 child.configure(state='normal')
         else:
-            self.backgroundButton["state"] = "disabled"
+            self.ActivateBackgroundButton(False)
             self.cam_choice_dropdown["state"] = "disabled"
             for child in self.inputsFrame.winfo_children():
                 child.configure(state='disable')
             
-    def BackgroundButton(self):
-        if self.backgroundButton["text"] == "TRAIN":
-            self.BackgroundButtonsActive(False)
-            
-            self.measurer = MeasurerInstance(ConstructApp.folder_path.get(), ConstructApp.outputFormatVariable.get())
-            
-            def ErrorCheckLoop():
-                state, message = MeasurerInstance.error
-                if (state):
-                    tk.messagebox.showerror("Error", message)
-                    MeasurerInstance.error = (False, "")
-                    self.backgroundButton.after(10000, ErrorCheckLoop)
-                    
-                else:
-                    self.backgroundButton.after(1000, ErrorCheckLoop)
-                    
-            self.backgroundButton.after(15, ErrorCheckLoop)
+    def BackgroundButtonClick(self):
+        if self.current_state == 0:
+            self.LockSettings(True)
+            self.measurer_instance = MeasurerInstance()
                     
             # Thread the Tkinter button countdown
-            # x = threading.Thread(target=ConstructApp.ButtonTextCountDown, args=(self.backgroundButton, 10,), daemon=True)
-            # x.start()
-            x = threading.Thread(target=self.measurer.TrainBackground, daemon=True)
+            x = threading.Thread(target=self.measurer_instance.TrainBackground, daemon=True)
             x.start()
             
-            self.backgroundButton.after(1000, self.ButtonTextCountDown, 20, x)
+            self.backgroundButton.after(1000, self.BackgroundButtonProcessing, "Gathering", x)
             
-        elif self.backgroundButton["text"] == "RESTART":
+        elif self.current_state == 1 or self.current_state == 2:
+            self.current_state = 0
+            
             # Reconfigure buttons and delete the previous instance
-            self.backgroundButton["text"] = "TRAIN"
-            self.backgroundButton.configure(bg = "#74B224")
-            self.startButton["state"] = "disabled"
-            self.startButton.configure(bg = "grey50")
-            
-            # Unlock settings
-            self.BackgroundButtonsActive(True)
+            # LockSettings() passively handles backgroundButton activation
+            self.ActivateStartButton(True)
+            self.LockSettings(False)
             
             Cameras.DisconnectMeasurer()
-            self.measurer = None
+            self.measurer_instance = None
             
-    def StartButton(self):
-        print("clicked START")
-        self.backgroundButton["state"] = "disabled"
-        self.startButton["state"] = "disabled"
-        # ConstructApp.thresholdSetting.Activate(False)
-        ConstructApp.numberFramesSetting.Activate(False)
-        ConstructApp.fishIDEntry["state"] = "disabled"
-        ConstructApp.additionalText["state"] = "disabled"
-        ConstructApp.w["state"] = "disabled"
-        ConstructApp.button["state"] = "disabled"
+    def StartButtonClick(self):
+        self.current_state = 2
         
-        self.measurer.outputFolder = ConstructApp.folder_path.get()
-        self.measurer.format = ConstructApp.outputFormatVariable.get()
+        self.ActivateBackgroundButton(False)
+        self.ActivateStartButton(False)
+        
+        TkinterApp.numberFramesSetting.Activate(False)
+        TkinterApp.fishIDEntry["state"] = "disabled"
+        TkinterApp.additionalText["state"] = "disabled"
+        TkinterApp.w["state"] = "disabled"
+        TkinterApp.button["state"] = "disabled"
+        
+        # These are now locked
+        self.measurer_instance.outputFolder = TkinterApp.folder_path.get()
+        self.measurer_instance.format = TkinterApp.outputFormatVariable.get()
         
         skeletonThread = threading.Thread(target=Cameras.TriggerAnalysis, daemon=True)
         skeletonThread.start()
     
-        self.startButton.after(1000, self.ReinstateSetting, skeletonThread)
+        self.startButton.after(1000, self.ReinstateSettings, skeletonThread)
     
-    def ReinstateSetting(self, thread):
+    def ReinstateSettings(self, thread):
         if thread.is_alive():
             if MeasurerInstance.processingFrame is None:
                 self.startButton["text"] = "COLLECTING..."
             else:
                 self.startButton["text"] = "FRAME " + str(MeasurerInstance.processingFrame + 1) + "/" + str(int(Cameras.number_of_frames))
             
-            self.startButton.after(1000, self.ReinstateSetting, thread)
+            self.startButton.after(1000, self.ReinstateSettings, thread)
         else:
+            self.current_state = 1
+            
             print("reinstating settings")
-            # ConstructApp.thresholdSetting.Activate(True)
-            ConstructApp.numberFramesSetting.Activate(True)
-            self.startButton["state"] = "normal"
-            self.startButton["text"] = "START"
-            self.backgroundButton["state"] = "normal"
-            ConstructApp.fishIDEntry["state"] = "normal"
-            ConstructApp.additionalText["state"] = "normal"
-            ConstructApp.w["state"] = "normal"
-            ConstructApp.button["state"] = "normal"
+            TkinterApp.numberFramesSetting.Activate(True)
+            self.ActivateBackgroundButton(True)
+            self.ActivateStartButton(True)
+            
+            TkinterApp.fishIDEntry["state"] = "normal"
+            TkinterApp.additionalText["state"] = "normal"
+            TkinterApp.w["state"] = "normal"
+            TkinterApp.button["state"] = "normal"
             
 
             
