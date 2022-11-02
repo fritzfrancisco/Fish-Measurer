@@ -36,11 +36,11 @@ class TkinterApp():
         
         
         # Create the app
-        rootWindow = tk.Tk()
-        rootWindow.geometry("1133x850")
-        rootWindow.title('Fish Measurer')
-        rootWindow.columnconfigure(0)
-        rootWindow.columnconfigure(1, weight=1)
+        self.rootWindow = tk.Tk()
+        self.rootWindow.geometry("1133x850")
+        self.rootWindow.title('Fish Measurer')
+        self.rootWindow.columnconfigure(0)
+        self.rootWindow.columnconfigure(1, weight=1)
         
         if not Cameras.connected:
             tk.messagebox.showerror("Camera Connection Error", "The app cannot find a camera connected to this device or could not connect to the selected camera (check that the USB cable/port is 3.0 compatible). Please verify the device connection and try again.")
@@ -51,7 +51,7 @@ class TkinterApp():
         settingsFrame.grid(row = 0, column = 0, sticky='ns')
 
         ## -- VIDEO -------------------------------------------------------------------------------------------
-        videoFrame = tk.Frame(master=rootWindow, relief='flat', borderwidth=2, padx=5, pady=5, bg="grey5")
+        videoFrame = tk.Frame(master=self.rootWindow, relief='flat', borderwidth=2, padx=5, pady=5, bg="grey5")
         videoFrame.grid(row=0, column=1, sticky="nsew")
 
         paneeli_image=tk.Label(videoFrame) #,image=img)
@@ -129,7 +129,7 @@ class TkinterApp():
         self.inputsFrame.columnconfigure(1, weight=1)
 
         # Settings inputs
-        TkinterApp.exposureSetting = DigitEntry("Exposure (ms): ", 100, 0, self.inputsFrame, trace="exposure")
+        TkinterApp.exposureSetting = DigitEntry("Exposure (ms): ", 200, 0, self.inputsFrame, trace="exposure")
         
         def SendGain(selection):
             ## error handling for failure? Tkinter pop-up
@@ -305,16 +305,16 @@ class TkinterApp():
         
         def on_closing():
             sys.stdout.close()
-            rootWindow.destroy()
+            self.rootWindow.destroy()
 
-        rootWindow.protocol("WM_DELETE_WINDOW", on_closing)
-        rootWindow.mainloop()
+        self.rootWindow.protocol("WM_DELETE_WINDOW", on_closing)
         
         
         
         
         
-        
+    def Run(self):
+        self.rootWindow.mainloop()
         
     def CheckIfCalibrated(self):
         # Loop to ensure calibration before training background
@@ -322,7 +322,8 @@ class TkinterApp():
             self.ActivateBackgroundButton(True)
         else:
             self.backgroundButton["text"] = "PLS CALIBRATE"
-            self.ActivateBackgroundButton(False)
+            if str(self.backgroundButton['state']) == "normal":
+                self.ActivateBackgroundButton(False)
             self.backgroundButton.after(500, self.CheckIfCalibrated)
         
     def BackgroundButtonProcessing(self, label, thread):
@@ -332,14 +333,14 @@ class TkinterApp():
             self.current_state = 1
             self.ActivateBackgroundButton(True)
             self.ActivateStartButton(True)
-        
-        if not self.measurer_instance.pulling_background and label[0] != "P":
-            self.backgroundButton.after(1000, self.BackgroundButtonProcessing, "Processing", thread)
         else:
-            if label[-3:] == "...":
-                self.backgroundButton.after(1000, self.BackgroundButtonProcessing, label[:-3], thread)
+            if not self.measurer_instance.pulling_background and label[0] != "P":
+                self.backgroundButton.after(1000, self.BackgroundButtonProcessing, "PROCESSING", thread)
             else:
-                self.backgroundButton.after(1000, self.BackgroundButtonProcessing, label + ".", thread)
+                if label[-3:] == "...":
+                    self.backgroundButton.after(1000, self.BackgroundButtonProcessing, label[:-3], thread)
+                else:
+                    self.backgroundButton.after(1000, self.BackgroundButtonProcessing, label + ".", thread)
                 
     def StartCheckingForErrors(self):
         # INTERRUPTION ERRORS
@@ -357,14 +358,16 @@ class TkinterApp():
         
         # START-BLOCK ERRORS
         if self.measurer_instance.block_tkinter_start_button:
-            self.ActivateStartButton(False)
+            if not self.SBInCorrectState:
+                self.ActivateStartButton(False)
             
             # Don't raise the pop-up if it's already been raised for this event
             if not self.block_start_already_popped:
                 self.block_start_already_popped = True
                 tk.messagebox.showerror("Shape is Missing!", "Failing to register any objects in the arena (quite the feat). Please ensure an object is present and contrasted against the trained background")
         else:
-            self.ActivateStartButton(True)
+            if not self.SBInCorrectState:
+                self.ActivateStartButton(True)
             self.block_start_already_popped = False
             
         self.backgroundButton.after(100, self.StartCheckingForErrors)
@@ -407,12 +410,14 @@ class TkinterApp():
         if self.current_state == 0:
             self.LockSettings(True)
             self.measurer_instance = MeasurerInstance()
+            
+            self.StartCheckingForErrors()
                     
             # Thread the Tkinter button countdown
             x = threading.Thread(target=self.measurer_instance.TrainBackground, daemon=True)
             x.start()
             
-            self.backgroundButton.after(1000, self.BackgroundButtonProcessing, "Gathering", x)
+            self.backgroundButton.after(1000, self.BackgroundButtonProcessing, "GATHERING", x)
             
         elif self.current_state == 1 or self.current_state == 2:
             self.current_state = 0
@@ -468,4 +473,18 @@ class TkinterApp():
             TkinterApp.button["state"] = "normal"
             
 
-            
+    def SBInCorrectState(self):
+        if (self.current_state == 0 or self.current_state == 2) and str(self.startButton['state']) != "disabled":
+            return False
+        elif self.current_state == 1 and str(self.startButton['state']) != "normal":
+            return False
+        else:
+            return True
+        
+    def BGBInCorrectState(self):
+        if (self.current_state == 0 or self.current_state == 1) and str(self.startButton['state']) != "normal":
+            return False
+        elif self.current_state == 2 and str(self.startButton['state']) != "disabled":
+            return False
+        else:
+            return True

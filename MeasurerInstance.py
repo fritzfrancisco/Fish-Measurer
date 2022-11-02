@@ -78,7 +78,7 @@ class MeasurerInstance():
         # Run through each frame and process it
         for i in range(len(raw)):
             MeasurerInstance.processingFrame = i
-            current_measurement = Measurement(i, raw[i], binarized[i])
+            current_measurement = Measurement(i, raw[i], binarized[i], self.outputFolder)
             
             if current_measurement.successful_init:
                 extended_frames_path = os.path.join(frames_path, str(i) + str(self.format))
@@ -87,7 +87,7 @@ class MeasurerInstance():
                 # Add it to the pool if successful
                 if current_measurement.ConstructLongestPath():
                     self.measurements.append(current_measurement)
-                    print("Frame: {0}; length (pix): {1}; length (cm): {2}".format(i, current_measurement.fil_length_pixels, Cameras.ConvertPixelsToLength(current_measurement.fil_length_pixels)))
+                    print("Frame: {0}; length (pix): {1:.2f}; length (cm): {2:.2f}".format(i, current_measurement.fil_length_pixels, Cameras.ConvertPixelsToLength(current_measurement.fil_length_pixels)))
 
                     skeleton_frames_path = os.path.join(frames_path, "full_skeleton_{0}{1}".format(i, self.format))
                     cv2.imwrite(skeleton_frames_path, current_measurement.skeleton_contour)
@@ -135,9 +135,12 @@ class MeasurerInstance():
                 cv2.imwrite(os.path.join(target_folder_name, "closest-image" + str(self.format)), chosen_image)
                 
                 # Watermark and save all subsequent images
-                for instance in self.measurements:
-                    watermarked_image = MeasurerInstance.GenericWatermark(instance)
-                    cv2.imwrite(os.path.join(target_folder_name, "watermarked-{0}{1}".format(instance.process_id, self.format)), watermarked_image)
+                for instance in self.measurements:  
+                    if instance.process_id == closest_index:
+                        cv2.imwrite(os.path.join(frames_path, "watermarked-{0}{1}".format(instance.process_id, self.format)), chosen_image)
+                    else:
+                        watermarked_image = MeasurerInstance.GenericWatermark(instance)
+                        cv2.imwrite(os.path.join(frames_path, "watermarked-{0}{1}".format(instance.process_id, self.format)), watermarked_image)
                     
         else:
             # Effectively interrupts the flow, the method ends after this block
@@ -174,7 +177,7 @@ class MeasurerInstance():
     
     def GenericWatermark(instance):
         chosen_image = cv2.putText(instance.processed_frame, 
-                                    "Length: {0:.2f}cm)".format(Cameras.ConvertPixelsToLength(instance.fil_length_pixels)), 
+                                    "Length: {0:.2f} cm".format(Cameras.ConvertPixelsToLength(instance.fil_length_pixels)), 
                                     (15, instance.processed_frame.shape[0]-30), cv2.FONT_HERSHEY_DUPLEX, 2.0, (255, 255, 255), lineType=cv2.LINE_AA)
         
         # Add metadata

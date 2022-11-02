@@ -19,5 +19,5 @@ from datetime import datetime
 camera = Cameras()
 app = TkinterApp()
 app.CheckIfCalibrated()
-app.StartCheckingForErrors()
+app.Run()
 
