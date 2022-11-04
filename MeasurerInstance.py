@@ -30,7 +30,7 @@ class MeasurerInstance():
         
         # Fill all blob contours and only show the contour with largest area
         try:
-            contour, hier = cv2.findContours(fully_binarized,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+            contour, hier = cv2.findContours(fully_binarized,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_NONE)
             biggestContour = max(contour, key = cv2.contourArea)
             
             self.im_bw = np.zeros(np.shape(fully_binarized)).astype('uint8')
@@ -120,7 +120,7 @@ class MeasurerInstance():
                 self.length_stats = (statistics.mean([instance.fil_length_pixels for instance in self.measurements]), statistics.stdev([instance.fil_length_pixels for instance in self.measurements]))
                 
                 # Export the data to .csv
-                df = pd.DataFrame(data={"frame_number": [instance.process_id for instance in self.measurements], "length_pix": [instance.fil_length_pixels for instance in self.measurements], "length_cm": [Cameras.ConvertPixelsToLength(instance.fil_length_pixels) for instance in self.measurements]})
+                df = pd.DataFrame(data={"frame_number": [instance.process_id for instance in self.measurements], "length_pix": [instance.fil_length_pixels for instance in self.measurements], "length_cm": [Cameras.ConvertPixelsToLength(instance.fil_length_pixels) for instance in self.measurements], "pixel_count_cm": [Cameras.ConvertPixelsToLength(len(instance.long_path_pixel_coords)) for instance in self.measurements]})
                 df.to_csv(os.path.join(target_folder_name, "data-output.csv"), sep=';',index=False) 
                 
                 # Find the instance with the closest length value
@@ -134,13 +134,15 @@ class MeasurerInstance():
                 chosen_image = MeasurerInstance.WatermarkImage(closest_instance, self.length_stats)
                 cv2.imwrite(os.path.join(target_folder_name, "closest-image" + str(self.format)), chosen_image)
                 
-                # Watermark and save all subsequent images
-                for instance in self.measurements:  
-                    if instance.process_id == closest_index:
-                        cv2.imwrite(os.path.join(frames_path, "watermarked-{0}{1}".format(instance.process_id, self.format)), chosen_image)
-                    else:
-                        watermarked_image = MeasurerInstance.GenericWatermark(instance)
-                        cv2.imwrite(os.path.join(frames_path, "watermarked-{0}{1}".format(instance.process_id, self.format)), watermarked_image)
+                # # Watermark and save all subsequent images
+                # for instance in self.measurements:  
+                #     cv2.imwrite(os.path.join(frames_path, "raw-{0}{1}".format(instance.process_id, self.format)), instance.raw_frame)
+                    
+                #     if instance.process_id == closest_index:
+                #         cv2.imwrite(os.path.join(frames_path, "watermarked-{0}{1}".format(instance.process_id, self.format)), chosen_image)
+                #     else:
+                #         watermarked_image = MeasurerInstance.GenericWatermark(instance)
+                #         cv2.imwrite(os.path.join(frames_path, "watermarked-{0}{1}".format(instance.process_id, self.format)), watermarked_image)
                     
         else:
             # Effectively interrupts the flow, the method ends after this block
