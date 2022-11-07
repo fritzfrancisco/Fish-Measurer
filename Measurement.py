@@ -99,24 +99,26 @@ class Measurement():
         self.filament.rht_branch_analysis()
         
         # Head point operations
-        self.FindHeadPoint()
-        base_branch_index = self.GetBranchFromPoint(self.head_point)[0]
+        self.head_point = Measurement.FindHeadPoint(self.filament, self.distance_transform)
+        base_branch_index = Measurement.GetBranchFromPoint(self.head_point, self.filament)[0]
         print("starting branch is branch {0}".format(base_branch_index))
         self.longest_path_branch_indices.append(base_branch_index)
         
-        intersection_points, intersection_indices = self.GetBranchIntersections(base_branch_index, also_indices=True)
-        end_points, end_indices = self.GetBranchEndPoints(base_branch_index, also_indices=True)
+        intersection_points, intersection_indices = Measurement.GetBranchIntersections(base_branch_index, also_indices=True)
+        end_points, end_indices = Measurement.GetBranchEndPoints(base_branch_index, also_indices=True)
         self.long_path_elements.append(LongPathElement(base_branch_index, intersection_points, intersection_indices, end_points, end_indices))
         
+        # Recursively construct the longest path network
         if not self.RecursiveBranching(base_branch_index):
+            print("Issue with LP recursion, aborting.")
             return False
 
         # Can maybe do this at the same time as the recursive branching
         if not self.ConstructOrderedLongPathCoordinates():
+            print("Issue with ordering and trimming, aborting.")
             return False
         
         self.long_path_pixel_coords = np.asarray(self.long_path_pixel_coords)
-        self.long_path_binary[self.long_path_pixel_coords[:,0], self.long_path_pixel_coords[:,1]] = 1
         
         # Ensure that the long path operation was successful and meaningful by checking if
         # it's within some tolerance of the FilFinder value
@@ -128,14 +130,25 @@ class Measurement():
 
         # Long path is assembled, start peripheral operations
         print("Finding SLP...")
-        self.FindStandardLengthPoint()
+        if not self.FindStandardLengthPoint():
+            print("Issue with SLP, aborting.")
+            return False
 
         print("Adding contour distances...")
-        if not self.AddBoundaryDistances():
+        if not self.AddContourDistances():
             return False
         
-        # Add base skeleton ending point information
+        # Draw the picture
+        self.long_path_binary[self.long_path_pixel_coords[:,0], self.long_path_pixel_coords[:,1]] = 1
         self.long_path_binary = PointUtils.AddThickBinaryDots(self.long_path_binary, self.head_point, self.tail_point)
+        if not self.slp_near_endpoint:
+            self.long_path_binary = PointUtils.AddThickBinaryDots(self.long_path_binary, self.standard_length_point, size=(5,5))
+        
+        # The tail of each element is the head of the following element, the last element's tail will be the overall tail point/SLP, which are already covered above
+        connectors_list = [element.head_point for element in self.long_path_elements]
+        self.long_path_binary = PointUtils.AddThickBinaryDots(self.long_path_binary, *connectors_list, size=(5,5))
+        
+        
         
         self.skeleton_contour = np.rint((self.long_path_binary * 255 + self.contour)/2).astype('uint8')
         self.processed_frame = cv2.addWeighted(self.skeleton_contour,0.65,cv2.cvtColor(self.raw_frame, cv2.COLOR_BGR2GRAY).astype('uint8'),0.35,0)
@@ -159,7 +172,7 @@ class Measurement():
                 return False
         else:
             # Get the raw intersection point(s)
-            intersection_points, intersection_indices = self.GetBranchIntersections(base_branch_index, also_indices=True)
+            intersection_points, intersection_indices = Measurement.GetBranchIntersections(base_branch_index, also_indices=True)
             
             # Remove duplicates and points that have already been covered
             intersec_pts_on_basebranch_indices = []
@@ -183,7 +196,7 @@ class Measurement():
                 for index in intersec_pts_on_basebranch_indices:
                     contending_intersec_pts = self.filament.intersec_pts[index] if isinstance(self.filament.intersec_pts[index], list) else [self.filament.intersec_pts[index]]
                     for point in contending_intersec_pts:
-                        possible_branches = self.GetBranchFromPoint(point, (5,5))
+                        possible_branches = Measurement.GetBranchFromPoint(point, self.filament, (5,5))
                         if possible_branches:
                             # Add it if it hasn't already been considered, and if it's not already on the long path
                             [connected_branch_indices.append(branch) for branch in possible_branches if branch not in connected_branch_indices and branch not in self.longest_path_branch_indices]
@@ -213,20 +226,9 @@ class Measurement():
                     print("Branch {0} is most aligned, adding".format(best_aligned_index))
                     self.longest_path_branch_indices.append(best_aligned_index)
                     
-                    intersection_points, intersection_indices = self.GetBranchIntersections(best_aligned_index, also_indices=True)
-                    end_points, end_indices = self.GetBranchEndPoints(best_aligned_index, also_indices=True)
+                    intersection_points, intersection_indices = Measurement.GetBranchIntersections(best_aligned_index, also_indices=True)
+                    end_points, end_indices = Measurement.GetBranchEndPoints(best_aligned_index, also_indices=True)
                     self.long_path_elements.append(LongPathElement(best_aligned_index, intersection_points, intersection_indices, end_points, end_indices))
-                    
-                    # self.fil_length_pixels += self.filament.branch_properties["length"][best_aligned_index].value
-                    # branch_points_array = np.asarray(self.filament.branch_pts(True)[best_aligned_index])
-                    # self.long_path_binary[branch_points_array[:,0], branch_points_array[:,1]] = 1
-                
-                    # if not (self.AddPointsToLongPathInOrder(best_aligned_index)):
-                    #     return False
-                    
-                    # image = cv2.resize(np.rint((self.long_path_binary * 255 + self.contour)/2).astype('uint8'), None, fy=0.5, fx=0.5)
-                    # cv2.imshow("Evolution", image)
-                    # cv2.waitKey(0)
                     
                     if self.RecursiveBranching(best_aligned_index):
                         return True
@@ -267,6 +269,11 @@ class Measurement():
                 if PointUtils.PointInNeighborhood(self.standard_length_point, self.tail_point, size=(41,41)):
                     self.slp_near_endpoint = True
                     print("SLP =~ Tailpoint")
+                else:
+                    if not self.TrimSLPLength():
+                        return False
+                    else:
+                        return True
             else:
                 print("All feasible SLP potentials weeded out")
                 self.standard_length_point = None
@@ -275,74 +282,79 @@ class Measurement():
             print("No SLP potentials found")
             self.standard_length_point = None
             self.slp_near_endpoint = True
+            
+    def TrimSLPLength(self):
+        # Which branch of the longest path contains the SLP?
+        slp_index = Measurement.GetBranchFromPoint(self.standard_length_point, self.filament)
+        if slp_index:
+            long_path_branch_indices = [element.branch_index for element in self.long_path_elements]
+            
+            slp_branch_index = long_path_branch_indices.index(slp_index)
+            print("Long path branch indices: {0}; SLP on branch {1}".format(long_path_branch_indices, slp_index))
+            
+            # Remove branches in reverse order until that branch
+            for long_path_elements_index in range(len(long_path_branch_indices)-1, slp_branch_index, -1):
+                self.RemoveBranch(long_path_elements_index)
+                
+                element = self.long_path_elements[long_path_elements_index]
+                print("Removed branch {0} with length {1:.2f}".format(element.branch_index, element.total_adjusted_length))
+            
+            # Now remove points in the relevant branch up until the SLP
+            print("Done removing full branches, current branches on the long path: {0}".format([element.branch_index for element in self.long_path_elements]))
+            element = self.long_path_elements[slp_branch_index]
+            
+            element_branch_points = list(map(tuple, element.ordered_branch_points_adjusted))
+            slp_index_on_branch = element_branch_points.index(self.standard_length_point)
+            points_to_remove = np.asarray(element_branch_points[slp_index_on_branch+1:])
+            length_to_remove = len(points_to_remove) * element.unit_length
+            print("Removing {0} points, representing {1:.2f} pixels".format(len(points_to_remove), length_to_remove))
+            
+            # Reflect these changes in the element itself
+            bool_array = PointUtils.ContainsMutualPoints(points_to_remove, element.ordered_branch_points_adjusted)
+            element.ordered_branch_points_adjusted = element.ordered_branch_points_adjusted[np.where(np.invert(bool_array))]
+            element.total_adjusted_length -= length_to_remove
+            element.tail_point = map(tuple, element.ordered_branch_points_adjusted[-1,:])
+            
+            # Apply these changes to the overall Measurement
+            bool_array = PointUtils.ContainsMutualPoints(points_to_remove, self.long_path_pixel_coords)
+            self.long_path_pixel_coords = self.long_path_pixel_coords[np.where(np.invert(bool_array))]
+            self.fil_length_pixels -= length_to_remove
+            
+            return True
+        else:
+            print("Could not identify SLP branch")
+            return False
 
-    def AddBoundaryDistances(self):
+    def AddContourDistances(self):
         # Get the points that are "pulled back" from the origin point, from which the added distance lines will stem
         # These lines will run through the pullback point, through the origin point, and intersect with the contour of the blob
         pullback_pts = []
 
         # For the head point, use a circle of radius 20 pixels to find a point further back on the skeleton
-        circle_mask = np.zeros(self.dimensions)
-        circle_radius = 20
-        for x in range(self.head_point[1] - circle_radius, self.head_point[1] + circle_radius + 1):
-            for y in range(self.head_point[0] - circle_radius, self.head_point[0] + circle_radius + 1):
-                if x <= self.dimensions[1] - 1 and x >= 0:
-                    if y <= self.dimensions[0] - 1 and y >= 0:
-                        ref_val = ((x-self.head_point[1])**2 + (y-self.head_point[0])**2)**(0.5)
-                        if ref_val >= circle_radius - 0.7 and ref_val <= circle_radius + 0.7:
-                            circle_mask[y][x] = 1
-        
-        longpath_bool_array = PointUtils.ContainsMutualPoints(np.argwhere(circle_mask), self.long_path_pixel_coords, return_array=True)
-        
-        try:
-            head_pullback_pt = self.long_path_pixel_coords[np.argwhere(longpath_bool_array)[0], :]
-        except IndexError:
-            print("error1")
-            # image = cv2.resize(np.rint((circle_mask + self.long_path_binary)/2 * 255).astype('uint8'), None, fy=0.5, fx=0.5)
-            # cv2.imshow("Circle Mask", image)
-            # cv2.waitKey(0)
+        head_pullback_pt = Measurement.CircleMaskIntersection(self.head_point, self.long_path_pixel_coords, self.dimensions)
+        if head_pullback_pt is None:
+            print("Head pullback does not intersect with the long path")
             return False
-            
-        pullback_pts.append(head_pullback_pt)
-        print("Head pullback point at {0}".format(head_pullback_pt))
+        else:
+            pullback_pts.append(head_pullback_pt)
+            print("Head pullback point set at {0}".format(head_pullback_pt))
 
         # For the tail point, use the standard length point if it's not within a 20 pixel radius of the end point
         # otherwise, also use a circle mask
         if (not self.slp_near_endpoint):
             pullback_pts.append(self.standard_length_point)
             print("Using standard length point for tail pullback, at {0}".format(self.standard_length_point))
-            
-            # We have to remove the added length if this case occurs
-            print("Trimming the branches")
-            if not self.RemoveAdditionalTailLength(self.standard_length_point):
-                return False
         else:
-            circle_mask = np.zeros(self.dimensions)
-            circle_radius = 20
-            for x in range(self.tail_point[1] - circle_radius, self.tail_point[1] + circle_radius + 1):
-                for y in range(self.tail_point[0] - circle_radius, self.tail_point[0] + circle_radius + 1):
-                    if x <= self.dimensions[1] - 1 and x >= 0:
-                        if y <= self.dimensions[0] - 1 and y >= 0:
-                            ref_val = ((x-self.tail_point[1])**2 + (y-self.tail_point[0])**2)**(0.5)
-                            if ref_val >= circle_radius - 0.7 and ref_val <= circle_radius + 0.7:
-                                circle_mask[y][x] = 1
-
-            longpath_bool_array = PointUtils.ContainsMutualPoints(np.argwhere(circle_mask), self.long_path_pixel_coords, return_array=True)
-            try:
-                pullback_pt = self.long_path_pixel_coords[np.argwhere(longpath_bool_array)[0], :]
-                pullback_pts.extend(list(map(tuple, pullback_pt)))
-                print("Using circle radius point for tail pullback, at {0}".format(pullback_pt))
-            except IndexError:
-                # kernel = (np.argwhere(cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7))) + self.end_point[0] - (3,3))
-                # circle_mask[kernel[:,0], kernel[:,1]] = 1
-                print("error2")
-                
-                # image = cv2.resize(np.rint(combined_array * 255).astype('uint8'), None, fy=0.3, fx=0.3)
-                # cv2.imshow("Failed overlap array", image)
-                # cv2.waitKey(0)
-                
-
+            tail_pullback_pt = Measurement.CircleMaskIntersection(self.tail_point, self.long_path_pixel_coords, self.dimensions)
+            if tail_pullback_pt is None:
+                print("Tail pullback does not intersect with the long path")
+                return False
+            else:
+                pullback_pts.append(tail_pullback_pt)
+                print("Using pullback for tail. Tail pullback point set at {0}".format(tail_pullback_pt))
+            
         # Run the assessment for each pullback/endpoint pair
+        relevant_line_mask = np.zeros(self.dimensions)
         for i in range(2):
             # First create the line mask through the pullback/end points
             line_mask = np.zeros(self.dimensions)
@@ -404,22 +416,20 @@ class Measurement():
                 step_y = 1 if end_pt[0]<=closest_boundary_point[0] else -1
                 step_x = 1 if end_pt[1]<=closest_boundary_point[1] else -1
                 if end_pt[1] == closest_boundary_point[1]:
-                    self.long_path_binary[end_pt[0]:closest_boundary_point[0]+step_y:step_y, end_pt[1]] = \
+                    relevant_line_mask[end_pt[0]:closest_boundary_point[0]+step_y:step_y, end_pt[1]] = \
                     line_mask[end_pt[0]:closest_boundary_point[0]+step_y:step_y, end_pt[1]]
                 elif end_pt[0] == closest_boundary_point[0]:
-                    self.long_path_binary[end_pt[0], end_pt[1]:closest_boundary_point[1]+step_x:step_x] = \
+                    relevant_line_mask[end_pt[0], end_pt[1]:closest_boundary_point[1]+step_x:step_x] = \
                     line_mask[end_pt[0], end_pt[1]:closest_boundary_point[1]+step_x:step_x]
                 else:
-                    self.long_path_binary[end_pt[0]:closest_boundary_point[0]+step_y:step_y,\
+                    relevant_line_mask[end_pt[0]:closest_boundary_point[0]+step_y:step_y,\
                                         end_pt[1]:closest_boundary_point[1]+step_x:step_x] = \
                     line_mask[end_pt[0]:closest_boundary_point[0]+step_y:step_y,\
                             end_pt[1]:closest_boundary_point[1]+step_x:step_x]
                 
                 distance = np.linalg.norm(np.asarray(end_pt) - np.asarray(closest_boundary_point))
                 print("Added head line to path, measuring {0:.2f} pixels".format(distance))
-                self.long_path_binary = PointUtils.AddThickBinaryDots(self.long_path_binary, closest_boundary_point, size=(11,11))
                 
-                # current_array = np.rint(np.add(self.long_path_binary * 255, self.contour)/2).astype('uint8')
                 # image = cv2.resize(current_array, None, fy=0.5, fx=0.5)
                 # cv2.imshow("head added", image)
                 # cv2.waitKey(0)
@@ -432,238 +442,121 @@ class Measurement():
                     step_y = 1 if pullback_pt[0]<=closest_boundary_point[0] else -1
                     step_x = 1 if pullback_pt[1]<=closest_boundary_point[1] else -1
                     if pullback_pt[1] == closest_boundary_point[1]:
-                        self.long_path_binary[pullback_pt[0]:closest_boundary_point[0]+step_y:step_y, pullback_pt[1]] = \
+                        relevant_line_mask[pullback_pt[0]:closest_boundary_point[0]+step_y:step_y, pullback_pt[1]] = \
                         line_mask[pullback_pt[0]:closest_boundary_point[0]+step_y:step_y, pullback_pt[1]]
                     elif pullback_pt[0] == closest_boundary_point[0]:
-                        self.long_path_binary[pullback_pt[0], pullback_pt[1]:closest_boundary_point[1]+step_x:step_x] = \
+                        relevant_line_mask[pullback_pt[0], pullback_pt[1]:closest_boundary_point[1]+step_x:step_x] = \
                         line_mask[pullback_pt[0], pullback_pt[1]:closest_boundary_point[1]+step_x:step_x]
                     else:
-                        self.long_path_binary[pullback_pt[0]:closest_boundary_point[0]+step_y:step_y,\
+                        relevant_line_mask[pullback_pt[0]:closest_boundary_point[0]+step_y:step_y,\
                                             pullback_pt[1]:closest_boundary_point[1]+step_x:step_x] = \
                         line_mask[pullback_pt[0]:closest_boundary_point[0]+step_y:step_y,\
                                 pullback_pt[1]:closest_boundary_point[1]+step_x:step_x]
                     
                     distance = np.linalg.norm(np.asarray(pullback_pt) - np.asarray(closest_boundary_point))
-                    
-                    # current_array = np.rint(np.add(self.long_path_binary * 255, self.contour)/2).astype('uint8')
-                    # image = cv2.resize(current_array, None, fy=0.5, fx=0.5)
-                    # cv2.imshow("tail added; SLP", image)
-                    # cv2.waitKey(0)
-
                 else:
                     print("Closest boundary point to TAIL endpoint {0}, is {1}".format(end_pt, closest_boundary_point))
                     step_y = 1 if end_pt[0]<=closest_boundary_point[0] else -1
                     step_x = 1 if end_pt[1]<=closest_boundary_point[1] else -1
                     if end_pt[1] == closest_boundary_point[1]:
-                        self.long_path_binary[end_pt[0]:closest_boundary_point[0]+step_y:step_y, end_pt[1]] = \
+                        relevant_line_mask[end_pt[0]:closest_boundary_point[0]+step_y:step_y, end_pt[1]] = \
                         line_mask[end_pt[0]:closest_boundary_point[0]+step_y:step_y, end_pt[1]]
                     elif end_pt[0] == closest_boundary_point[0]:
-                        self.long_path_binary[end_pt[0], end_pt[1]:closest_boundary_point[1]+step_x:step_x] = \
+                        relevant_line_mask[end_pt[0], end_pt[1]:closest_boundary_point[1]+step_x:step_x] = \
                         line_mask[end_pt[0], end_pt[1]:closest_boundary_point[1]+step_x:step_x]
                     else:
-                        self.long_path_binary[end_pt[0]:closest_boundary_point[0]+step_y:step_y,\
+                        relevant_line_mask[end_pt[0]:closest_boundary_point[0]+step_y:step_y,\
                                             end_pt[1]:closest_boundary_point[1]+step_x:step_x] = \
                         line_mask[end_pt[0]:closest_boundary_point[0]+step_y:step_y,\
                                 end_pt[1]:closest_boundary_point[1]+step_x:step_x]
                     
                     distance = np.linalg.norm(np.asarray(end_pt) - np.asarray(closest_boundary_point))
-                    
-                    # current_array = np.rint(np.add(self.long_path_binary * 255, self.contour)/2).astype('uint8')
-                    # image = cv2.resize(current_array, None, fy=0.5, fx=0.5)
-                    # cv2.imshow("tail added; pullback", image)
-                    # cv2.waitKey(0)
                 
                 print("Added tail line to path, measuring {0:.2f} pixels".format(distance))
-                self.long_path_binary = PointUtils.AddThickBinaryDots(self.long_path_binary, closest_boundary_point, size=(11,11))
 
             self.fil_length_pixels += distance
         
+        # Coerce the binary array of added line segments to bool, and then add the true coordinates to the path
+        bool_coerced_additions = np.array(relevant_line_mask, dtype=bool)
+        self.long_path_pixel_coords = np.vstack((self.long_path_pixel_coords, np.where(bool_coerced_additions)))
+        
         return True
         
-    def RemoveAdditionalTailLength(self, pullback_pt):
-        ### rewrite this to make use of ELEMENTS
-        ## maybe put this in SLP method, or reference it there instead of contour distances
+    def CircleMaskIntersection(point, array, dimensions):
+        """Creates a circle mask of supplied radius centered on the supplied point, and finds where this circle intersects with the supplied array
+
+        Args:
+            point (tuple): The (y,x) coordinate that will define the center of the circle to be drawn
+            array (np.ndarray): The reference array, which we'll contrast against the drawn circle for intersections
+
+        Returns:
+            ndarray<int, int>: An ndarray of size (n,2), where n is the number of intersections found with the circle mask, and each row corresponds to a (y,x) coordinate
+        """
         
+        circle_mask = np.zeros(dimensions)
+        circle_radius = 20
+        for x in range(point[1] - circle_radius, point[1] + circle_radius + 1):
+            for y in range(point[0] - circle_radius, point[0] + circle_radius + 1):
+                if x <= dimensions[1] - 1 and x >= 0:
+                    if y <= dimensions[0] - 1 and y >= 0:
+                        ref_val = ((x-point[1])**2 + (y-point[0])**2)**(0.5)
+                        if ref_val >= circle_radius - 0.7 and ref_val <= circle_radius + 0.7:
+                            circle_mask[y][x] = 1
         
-        
-        
-        # Figure out which branch of the longest path contains the pullback point
-        pullback_branch_index = self.GetBranchFromPoint(pullback_pt)[0]
-        print("Branch {0} is the pullback branch".format(pullback_branch_index))
-        
-        if pullback_branch_index is not None:
-            pullback_index_LP_array = self.longest_path_branch_indices.index(pullback_branch_index)
-            print("This branch is at position {0} in the LP branches array (0-indexed). There are {1} branches in this array".format(pullback_index_LP_array, len(self.longest_path_branch_indices)))
-            
-            # Iteratively remove branches in reverse order up to that branch
-            for i in range(len(self.longest_path_branch_indices)-1, pullback_index_LP_array, -1):
-                print("Current branch indices: {0}".format(self.longest_path_branch_indices))
-                print("Removing branch {0} w/length {1} pixels".format(self.longest_path_branch_indices[i], self.filament.branch_properties["length"][self.longest_path_branch_indices[i]].value))
-                
-                # base_length = self.filament.branch_properties["length"][i].value
-                # self.fil_length_pixels += base_length
-                # unit_length = base_length / len(base_branch_points)
-                
-                self.fil_length_pixels -= self.filament.branch_properties["length"][self.longest_path_branch_indices[i]].value
-                
-                index_array = np.asarray(self.filament.branch_pts(True)[self.longest_path_branch_indices[i]])
-                self.long_path_binary[index_array[:,0], index_array[:,1]] = 0
-                
-                del self.longest_path_branch_indices[i]
-                print("New branch indices: {0}".format(self.longest_path_branch_indices))
-                            
-            # Remove all points in the pullback branch up until the pullback point
-            # The branch may not be ordered from head to tail, use the ordered long_path_pixel_coords to verify
-            branch_points = self.filament.branch_pts(True)[pullback_branch_index]
-            pullback_point_index = np.argwhere(np.equal(np.asarray(self.long_path_pixel_coords), pullback_pt).all(axis=1))[0][0]
-            self.long_path_pixel_coords = self.long_path_pixel_coords[:pullback_point_index + 1]
-            
-            if PointUtils.ContainsMutualPoints(branch_points[0], np.asarray(self.long_path_pixel_coords)):
-                # The first point is still in, so the branch is oriented head --> tail
-                print("{0} is still in long path coords array, head--> tail".format(branch_points[0]))
-                extraneous_points_array = np.asarray(branch_points[np.argwhere(np.equal(branch_points, pullback_pt).all(axis=1))[0][0]+1:])
-            else:
-                # The first point is not in, so the branch is oriented tail --> head
-                print("{0} is NOT in long path coords array anymore, tail --> head".format(branch_points[0]))
-                extraneous_points_array = np.asarray(branch_points[:np.argwhere(np.equal(branch_points, pullback_pt).all(axis=1))[0][0]])
-            
-            self.fil_length_pixels -= np.shape(extraneous_points_array)[0]
-            self.long_path_binary[extraneous_points_array[:,0], extraneous_points_array[:,1]] = 0
-            self.long_path_binary = PointUtils.AddThickBinaryDots(self.long_path_binary, self.standard_length_point)
-            
-            # current_array = np.rint(np.add(self.long_path_binary * 255, self.contour)/2).astype('uint8')
-            # image = cv2.resize(current_array, None, fy=0.5, fx=0.5)
-            # cv2.imshow("Post-trim", image)
-            # cv2.waitKey(0)
-            
-            return True
+        longpath_bool_array = PointUtils.ContainsMutualPoints(np.argwhere(circle_mask), array)
+        if not any(longpath_bool_array):
+            return None
         else:
-            print("Could not identify tail pullback point base branch")
-            return False
-        
-    # def AddPointsToLongPathInOrder(self, new_branch_index):
-    #     print("Adding {0} points to ordered long path. Current length before addition: {1}".format(len(self.filament.branch_pts(True)[new_branch_index]), len(self.long_path_pixel_coords)))
-        
-    #     if np.asarray(self.long_path_pixel_coords).size == 0:
-    #         print("coords path is empty, initializing")
-    #         self.long_path_pixel_coords = [point for point in self.filament.branch_pts(True)[new_branch_index]]
-            
-    #         if not PointUtils.PointInNeighborhood(self.head_point, self.long_path_pixel_coords[0]):
-    #             print("head point at other end, reversing order")
-    #             self.long_path_pixel_coords.reverse()       
-            
-    #         return True
-    #     else:
-    #         # Get the shared intersection point
-    #         intersection = None
-    #         for intersec_pt in self.filament.intersec_pts:
-    #             contending_intersec_pts = intersec_pt if isinstance(intersec_pt, list) else [intersec_pt]
-    #             for point in contending_intersec_pts:
-    #                 kernel = (np.argwhere(cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7))) + point - (3,3))
-                    
-    #                 branch_mutual_points = PointUtils.ContainsMutualPoints(kernel, self.filament.branch_pts(True)[new_branch_index])
-    #                 longpath_mutual_points = PointUtils.ContainsMutualPoints(kernel, np.asarray(self.long_path_pixel_coords))
-                    
-    #                 # if the intersection point exists both on the new branch and the current long path, it's the right one
-    #                 if branch_mutual_points and longpath_mutual_points:
-    #                     intersection = point
-    #                     print("Found the shared intersection point at: {0}".format(point))
-    #                     break
-                    
-    #             if intersection is not None:
-    #                 break
-            
-    #         # Remove length up until this point
-    #         if intersection is None:
-    #             print("Could not find the shared intersection point")
-    #             return False
-    #         else:
-    #             if self.long_path_binary[intersection] == 0:
-    #                 self.long_path_binary[intersection] = 1
-    #                 self.fil_length_pixels += 1
-                                
-    #             intersection_bool_array = PointUtils.ContainsMutualPoints(kernel, np.asarray(self.long_path_pixel_coords), return_array=True)
-    #             intersection_index_on_longpath = np.where(intersection_bool_array == True)[0][-1]
-                
-    #             # If the intersection point is the last point on the current long path, do nothing
-    #             if intersection_index_on_longpath != len(self.long_path_pixel_coords) - 1:
-    #                 dist_to_remove = len(self.long_path_pixel_coords[intersection_index_on_longpath + 1:])
-    #                 self.fil_length_pixels -= dist_to_remove
-    #                 print("Trimming current long path by {0} pixels".format(dist_to_remove))
-                    
-    #                 self.long_path_pixel_coords = self.long_path_pixel_coords[:intersection_index_on_longpath + 1]
-    #             else:
-    #                 print("Intersection point is the last point on the current long path")
-            
-    #         # Find on which side the shared intersection point is. Point may not be exactly on the branch, use a 5x5 kernel
-    #         base_start_point = self.long_path_pixel_coords[0]
-    #         base_end_point = self.long_path_pixel_coords[-1]
-    #         new_branch_start_point = self.filament.branch_pts(True)[new_branch_index][0]
-    #         new_branch_end_point = self.filament.branch_pts(True)[new_branch_index][-1]
-            
-    #         base_intersection_near_start = PointUtils.PointInNeighborhood(intersection, base_start_point)
-    #         new_branch_intersection_near_start = PointUtils.PointInNeighborhood(intersection, new_branch_start_point)
-            
-    #         print("start_base: {0}; end_base: {1}; start_branch: {2}; end_branch: {3}".format(base_start_point, base_end_point, new_branch_start_point, new_branch_end_point))
+            head_pullback_pt = array[np.argwhere(longpath_bool_array)[0], :]
+            return head_pullback_pt
 
-    #         # Add to the longpath coords, subject to the location of the shared intersection point
-    #         if base_intersection_near_start and new_branch_intersection_near_start:
-    #             # Start-start connection, reverse new branch order and insert at front of list
-    #             print("start-start")
-    #             for point in self.filament.branch_pts(True)[new_branch_index]:
-    #                 self.long_path_pixel_coords.insert(0, point)
-    #         elif base_intersection_near_start and not new_branch_intersection_near_start:
-    #             # Start-end connection, insert at front of list
-    #             print("start-end")
-    #             try:
-    #                 if isinstance(self.long_path_pixel_coords, list):
-    #                     self.long_path_pixel_coords = self.filament.branch_pts(True)[new_branch_index].tolist() + self.long_path_pixel_coords
-    #                 else:
-    #                     self.long_path_pixel_coords = np.vstack([self.filament.branch_pts(True)[new_branch_index], self.long_path_pixel_coords])
-    #             except ValueError:
-    #                 print(type(self.filament.branch_pts(True)[new_branch_index]))
-    #                 print(type(self.long_path_pixel_coords))
-    #         elif not base_intersection_near_start and new_branch_intersection_near_start:       
-    #             # End-start connection, append to back of list
-    #             print("end-start")
-    #             self.long_path_pixel_coords.extend(self.filament.branch_pts(True)[new_branch_index])
-    #         elif not base_intersection_near_start and not new_branch_intersection_near_start:       
-    #             # End-end connection, reverse new branch order and append to back of list
-    #             print("end-end")
-    #             for i in range(len(self.filament.branch_pts(True)[new_branch_index])-1, -1, -1):
-    #                 self.long_path_pixel_coords.append(self.filament.branch_pts(True)[new_branch_index][i])
-    #         else:
-    #             print("Connection of added branch unclear. Aborting instance.")
-    #             return False
-        
-    #     print("New length: {0}".format(len(self.long_path_pixel_coords)))
-    #     return True
+    def GetBranchFromPoint(point, filament, size=None):
+        """Get the local branch index of the supplied filament that a given point pertains to
 
-    def GetBranchFromPoint(self, point, size=None):
+        Args:
+            point (tuple): a (y,x) tuple
+            filament (Filfinder filament): The filament in which the branches to be searched thorugh exist
+            size (tuple, optional): An (n,n) tuple that layers a search kernel of the indicated size upon the supplied point. Defaults to None.
+
+        Returns:
+            list: A list of branch indices local to the supplied filament that the suplied point belongs to
+        """
         # Supply a point (x, y), and get the branch that point belongs to if it exists
         branches = []
+        number_of_branches = len(filament.branch_properties["length"])
         if size is None:
-            for i in range(self.number_of_branches):
-                if PointUtils.ContainsMutualPoints(np.asarray(point), self.filament.branch_pts(True)[i]):
+            for i in range(number_of_branches):
+                if any(PointUtils.ContainsMutualPoints(np.asarray(point), filament.branch_pts(True)[i])):
                     return [i]
         else:
             kernel = (np.argwhere(cv2.getStructuringElement(cv2.MORPH_ELLIPSE,size)) + point - ((np.asarray(size) - 1) / 2).astype('uint8'))
-            for i in range(self.number_of_branches):
-                if PointUtils.ContainsMutualPoints(kernel, self.filament.branch_pts(True)[i]):
+            for i in range(number_of_branches):
+                if any(PointUtils.ContainsMutualPoints(kernel, filament.branch_pts(True)[i])):
                     branches.append(i)
         
         return branches
             
-    def GetBranchIntersections(self, branch_index, also_indices=False):
+    def GetBranchIntersections(branch_index, filament, also_indices=False):
+        """ Find the coordinates of the supplied filament's intersection points upon the branch at the supplied branch index, if any
+
+        Args:
+            branch_index (int): The local index of the branch of the supplied filament object, upon which the search for intersections will take place
+            filament (Filfinder filament): The filament, containing branches and intersection points
+            also_indices (bool, optional): Whether to return an additional variable with the intersection indices (local to the supplied filament) that were identified as existing on the branch at the supplied index in addition to the intersection coordinates themselves. Defaults to False.
+
+        Returns:
+            list<tuple>: A list of (y,x) tuples representing the coordinates of intersections (local to the supplied filament) found on the branch at the supplied index
+            OR (list<tuple>, list<int>): A tuple of lists, where the first item is the list defined above, and the second is a 1D list of integers corresponding to the indices local to the filament intersections that were found on the branch at the supplied index
+        """
         # Get the intersection point(s) on the branch
         intersec_pts_on_branch = []
         intersec_pts_on_branch_indices = []
 
-        for i in range(len(self.filament.intersec_pts)):
-            intersec_pts = self.filament.intersec_pts[i] if isinstance(self.filament.intersec_pts[i], list) else [self.filament.intersec_pts[i]]
+        for i in range(len(filament.intersec_pts)):
+            intersec_pts = filament.intersec_pts[i] if isinstance(filament.intersec_pts[i], list) else [filament.intersec_pts[i]]
             for point in intersec_pts:
                 kernel = (np.argwhere(cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))) + point - (2,2))
-                branch_mutual_points = PointUtils.ContainsMutualPoints(kernel, self.filament.branch_pts(True)[branch_index])
+                branch_mutual_points = any(PointUtils.ContainsMutualPoints(kernel, filament.branch_pts(True)[branch_index]))
 
                 if branch_mutual_points:
                     intersec_pts_on_branch.append(point)
@@ -675,14 +568,25 @@ class Measurement():
         else:
             return intersec_pts_on_branch, intersec_pts_on_branch_indices
 
-    def GetBranchEndPoints(self, branch_index, also_indices=False):
+    def GetBranchEndPoints(branch_index, filament, also_indices=False):
+        """ Find the coordinates of the supplied filament's end points upon the branch at the supplied branch index, if any
+
+        Args:
+            branch_index (int): The local index of the branch of the supplied filament object, upon which the search for the end points will take place
+            filament (Filfinder filament): The Filfinder filament object, containing branches and end points
+            also_indices (bool, optional): Whether to return an additional variable with the end point indices (local to the supplied filament) that were identified as existing on the branch at the supplied index in addition to the end coordinates themselves. Defaults to False.
+
+        Returns:
+            list<tuple>: A list of (y,x) tuples representing the coordinates of the end points (local to the supplied filament) found on the branch at the supplied index
+            OR (list<tuple>, list<int>): A tuple of lists, where the first item is the list defined above, and the second is a 1D list of integers corresponding to the indices local to the filament end points that were found on the branch at the supplied index
+        """
         # Get the intersection point(s) on the branch
         end_pts_on_branch = []
         end_pts_on_branch_indices = []
         
-        for i in range(len(self.filament.end_pts)):
-            end_pt = self.filament.end_pts[i]
-            if PointUtils.ContainsMutualPoints(np.asarray(end_pt), self.filament.branch_pts(True)[branch_index]):
+        for i in range(len(filament.end_pts)):
+            end_pt = filament.end_pts[i]
+            if any(PointUtils.ContainsMutualPoints(np.asarray(end_pt), filament.branch_pts(True)[branch_index])):
                 end_pts_on_branch.append(end_pt)
                 end_pts_on_branch_indices.append(i)
                         
@@ -692,25 +596,36 @@ class Measurement():
         else:
             return end_pts_on_branch, end_pts_on_branch_indices
 
-    def FindHeadPoint(self):
+    def FindHeadPoint(filament, distance_transform):
+        """ Find the head point of the skeleton, defined as the end point with maximal distance to the fish boundary
+        
+        Args:
+            filament (Filfinder filament): The filament in which the branches to be searched thorugh exist
+            distance_transform (np.ndarray): An array of size self.dimensions, at every cell of which is the distance to the fish boundary
+
+        Returns:
+            tuple: The (y,x) coordinate of the head point set in the dimensional space of self.dimensions
+        """
         # Find the starting point: the skeleton end point in the head
         contending_pt = None
-        for i in range(len(self.filament.end_pts)):
+        head_point = None
+        for i in range(len(filament.end_pts)):
 
             # The entry may be a list of closely located points, just take the first one if so
-            if isinstance(self.filament.end_pts[i], list):
-                contending_pt = self.filament.end_pts[i][0]
+            if isinstance(filament.end_pts[i], list):
+                contending_pt = filament.end_pts[i][0]
             else:
-                contending_pt = self.filament.end_pts[i]
+                contending_pt = filament.end_pts[i]
 
-            if self.head_point is None:
-                self.head_point = contending_pt
+            if head_point is None:
+                head_point = contending_pt
             else:
-                print("head_point dist: {0}; contending_pt dist: {1}".format(self.distance_transform[self.head_point], self.distance_transform[contending_pt]))
-                if self.distance_transform[contending_pt] > self.distance_transform[self.head_point]:
-                    self.head_point = contending_pt
+                print("head_point dist: {0}; contending_pt dist: {1}".format(distance_transform[head_point], distance_transform[contending_pt]))
+                if distance_transform[contending_pt] > distance_transform[head_point]:
+                    head_point = contending_pt
 
-        print("Head point: {0}".format(self.head_point))
+        print("Head point: {0}".format(head_point))
+        return head_point
         
     def ConstructOrderedLongPathCoordinates(self):
         print("Constructing pixel list")
@@ -769,53 +684,25 @@ class Measurement():
                     
         return True
                     
-    def AddBranch(self, base_element):
-        base_branch_points = self.filament.branch_pts(True)[base_element.branch_index]
-        print("Branch contains {0} points".format(np.shape(base_branch_points)[0]))
-        
-        head_kernel = (np.argwhere(cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))) + base_element.head_point - (2,2))
-        head_bool_array = PointUtils.ContainsMutualPoints(head_kernel, base_branch_points, return_array=True)
-        if not any(head_bool_array):
+    def AddBranch(self, element):
+        base_branch_points = self.filament.branch_pts(True)[element.branch_index]
+        branch_length = self.filament.branch_properties["length"][element.branch_index].value
+        if not element.ProcessElement(base_branch_points, branch_length):
             return False
-        head_index = np.argwhere(head_bool_array)[0][0]
-        
-        tail_kernel = (np.argwhere(cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))) + base_element.tail_point - (2,2))
-        tail_bool_array = PointUtils.ContainsMutualPoints(tail_kernel, base_branch_points, return_array=True)
-        if not any(tail_bool_array):
-            return False
-        tail_index = np.argwhere(tail_bool_array)[0][-1]
-        
-        print("Head index: {0}; tail index: {1}".format(head_index, tail_index))
-        if head_index > tail_index:
-            print("Branch orientation is from tail to head, reversing")
-            base_branch_points = np.flip(base_branch_points, axis=0)
         else:
-            print("Branch is correctly oriented")
-        
-        # Then determine if we need to remove length from the base branch
-        base_length = self.filament.branch_properties["length"][base_element.branch_index].value
-        self.fil_length_pixels += base_length
-        unit_length = base_length / len(base_branch_points)
-        
-        if not PointUtils.PointInNeighborhood(base_element.head_point, base_branch_points[0]):
-            # The head point occurs somewhere mid-branch, we need to trim up until that point
-            trimmed_length = head_index * unit_length
-            self.fil_length_pixels -= trimmed_length
-            base_branch_points = base_branch_points[head_index:, :]
-            print("Head index is mid-branch, trimming {0:.2f} pixels".format(trimmed_length))
-        else:
-            print("Head point is at the beginning of the list")
+            # Record the length and save the coords
+            self.long_path_pixel_coords.extend(list(map(tuple, element.ordered_branch_points_adjusted)))
+            self.fil_length_pixels += element.total_adjusted_length
             
-        if not PointUtils.PointInNeighborhood(base_element.tail_point, base_branch_points[-1]):
-            # The tail point occurs somewhere mid-branch, we need to trim from that point on
-            trimmed_length = len(base_branch_points) - tail_index * unit_length
-            self.fil_length_pixels -= trimmed_length
-            base_branch_points = base_branch_points[:tail_index+1, :]
-            print("Tail index is mid-branch, trimming {0:.2f} pixels".format(trimmed_length))
-        else:
-            print("Tail point is at the end of the list")
-            
-        # Record the length and save the coords
-        self.long_path_pixel_coords.extend(list(map(tuple, base_branch_points)))
+            return True
+    
+    def RemoveBranch(self, index):
+        element = self.long_path_elements[index]
         
-        return True
+        # Remove associated points and length
+        bool_array = PointUtils.ContainsMutualPoints(element.ordered_branch_points_adjusted, self.long_path_pixel_coords)
+        self.long_path_pixel_coords = self.long_path_pixel_coords[np.where(np.invert(bool_array))]
+        self.fil_length_pixels -= element.total_adjusted_length
+        
+        # Finally, remove this from the long path element list
+        del self.long_path_elements[index]

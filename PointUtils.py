@@ -22,15 +22,15 @@ def PointInNeighborhood(point1, point2, size=(5,5)):
     else:
         return False
     
-def ContainsMutualPoints(array1, array2, return_array=False):
+def ContainsMutualPoints(array1, array2):
     """ Determine whether any point in array1 exists within array2
 
     Args:
-        array1 (ndarray): The (n,2) sub-array, consituted of (y,x) points
+        array1 (ndarray): The (m,2) sub-array, consituted of (y,x) points
         array2 (ndarray): The (n,2) principal-array, consituted of (y,x) points
 
     Returns:
-        bool: Does any point in the sub array exist in the principal array
+        ndarray<bool>: 1D bool (n) array, indicating which rows in array2 also exit within array1
     """
     
     if not isinstance(array1, np.ndarray):
@@ -44,8 +44,30 @@ def ContainsMutualPoints(array1, array2, return_array=False):
 
     # Creates an ndarray<bool> in the shape of array2 where each element indicates whether that element also exists in array1
     bool_overlap_array = np.asarray((array1[:, None] == array2)).all(axis=2).any(axis=0)
-    
-    if return_array:
-        return bool_overlap_array
-    else:
-        return any(bool_overlap_array)
+    return bool_overlap_array
+
+def Distance(P1, P2):
+    """
+    This function computes the distance between 2 points defined by
+    P1 = (x1,y1) and P2 = (x2,y2) 
+    """
+
+    return ((P1[0] - P2[0])**2 + (P1[1] - P2[1])**2) ** 0.5
+
+
+def OptimizePath(coords, start=None):
+    """
+    This function finds the nearest point to a point
+    coords should be a list in this format coords = [ [x1, y1], [x2, y2] , ...] 
+
+    """
+    if start is None:
+        start = coords[0]
+    pass_by = coords
+    path = [start]
+    pass_by.remove(start)
+    while pass_by:
+        nearest = min(pass_by, key=lambda x: Distance(path[-1], x))
+        path.append(nearest)
+        pass_by.remove(nearest)
+    return path
