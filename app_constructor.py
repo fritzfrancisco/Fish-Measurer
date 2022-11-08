@@ -25,6 +25,7 @@ class TkinterApp():
         # Principal components
         self.startButton = None
         self.backgroundButton = None
+        self.skeletonThread = None
         
         ## consider removing all unnecessary class variables
         
@@ -319,11 +320,11 @@ class TkinterApp():
     def CheckIfCalibrated(self):
         # Loop to ensure calibration before training background
         if Cameras.GetSlope() is not None and Cameras.GetIntercept() is not None:
-            self.ActivateBackgroundButton(True)
+            self.BackgroundButtonState()
         else:
             self.backgroundButton["text"] = "PLS CALIBRATE"
             if str(self.backgroundButton['state']) == "normal":
-                self.ActivateBackgroundButton(False)
+                self.BackgroundButtonState(disabled=True)
             self.backgroundButton.after(500, self.CheckIfCalibrated)
         
     def BackgroundButtonProcessing(self, label, thread):
@@ -331,8 +332,8 @@ class TkinterApp():
 
         if not thread.is_alive():
             self.current_state = 1
-            self.ActivateBackgroundButton(True)
-            self.ActivateStartButton(True)
+            self.BackgroundButtonState()
+            self.StartButtonState()
         else:
             if not self.measurer_instance.pulling_background and label[0] != "P":
                 self.backgroundButton.after(1000, self.BackgroundButtonProcessing, "PROCESSING", thread)
@@ -359,7 +360,7 @@ class TkinterApp():
         # START-BLOCK ERRORS
         if self.measurer_instance.block_tkinter_start_button:
             if not self.SBInCorrectState:
-                self.ActivateStartButton(False)
+                self.StartButtonState()
             
             # Don't raise the pop-up if it's already been raised for this event
             if not self.block_start_already_popped:
@@ -367,48 +368,45 @@ class TkinterApp():
                 tk.messagebox.showerror("Shape is Missing!", "Failing to register any objects in the arena (quite the feat). Please ensure an object is present and contrasted against the trained background")
         else:
             if not self.SBInCorrectState:
-                self.ActivateStartButton(True)
+                self.StartButtonState()
             self.block_start_already_popped = False
             
         self.backgroundButton.after(100, self.StartCheckingForErrors)
     
-    def ActivateStartButton(self, activate):
-        if activate:
-            if self.current_state == 0:
-                self.startButton.configure(bg="grey50", state="disabled")
-            elif self.current_state == 1:
-                self.startButton.configure(bg="#74B224", state="normal")
-            elif self.current_state == 2:
-                self.startButton.configure(bg="grey50", state="disabled")
-        else:
+    def StartButtonState(self):
+        if self.current_state == 0:
+            self.startButton.configure(bg="grey50", state="disabled")
+        elif self.current_state == 1:
+            self.startButton.configure(bg="#74B224", state="normal")
+        elif self.current_state == 2:
             self.startButton.configure(bg="grey50", state="disabled")
     
-    def ActivateBackgroundButton(self, activate):
-        if activate:
+    def BackgroundButtonState(self, disable=False):
+        if not disable:
             if self.current_state == 0:
                 self.backgroundButton.configure(text='TRAIN', bg="#74B224", state="normal")
             elif self.current_state == 1:
                 self.backgroundButton.configure(text='RESTART', bg ="#185CA8", state="normal")
             elif self.current_state == 2:
-                self.backgroundButton.configure(bg="grey50", state="disabled")
+                self.backgroundButton.configure(text='CANCEL', bg ="#185CA8", state="normal")
         else:
             self.backgroundButton.configure(bg="grey50", state="disabled")
             
     def LockSettings(self, lock):
         if not lock:
-            self.ActivateBackgroundButton(True)
             self.cam_choice_dropdown["state"] = "normal"
             for child in self.inputsFrame.winfo_children():
                 child.configure(state='normal')
         else:
-            self.ActivateBackgroundButton(False)
             self.cam_choice_dropdown["state"] = "disabled"
             for child in self.inputsFrame.winfo_children():
                 child.configure(state='disable')
             
     def BackgroundButtonClick(self):
         if self.current_state == 0:
+            # Initiate the process of training a background. State is changed to 1 by the BackgroundButtonProcessing() method
             self.LockSettings(True)
+            self.BackgroundButtonState(disable=True)
             self.measurer_instance = MeasurerInstance()
             
             self.StartCheckingForErrors()
@@ -419,22 +417,31 @@ class TkinterApp():
             
             self.backgroundButton.after(1000, self.BackgroundButtonProcessing, "GATHERING", x)
             
-        elif self.current_state == 1 or self.current_state == 2:
+        elif self.current_state == 1:
+            # Remove the trained background and return to ground state
             self.current_state = 0
             
-            # Reconfigure buttons and delete the previous instance
-            # LockSettings() passively handles backgroundButton activation
-            self.ActivateStartButton(True)
+            # Reconfigure buttons
+            self.StartButtonState()
+            self.BackgroundButtonState()
             self.LockSettings(False)
             
+            # Delete the previous instance
             Cameras.DisconnectMeasurer()
             self.measurer_instance = None
+            
+        elif self.current_state == 2:
+            # Interrupt the run and return to the trained instance
+            self.BackgroundButtonState(disabled=True)
+            
+            # Kill the thread, and the ReinstateSettings() method will handle the reinstating of the state and buttons
+            MeasurerInstance.stop = True
             
     def StartButtonClick(self):
         self.current_state = 2
         
-        self.ActivateBackgroundButton(False)
-        self.ActivateStartButton(False)
+        self.BackgroundButtonState()
+        self.StartButtonState()
         
         TkinterApp.numberFramesSetting.Activate(False)
         TkinterApp.fishIDEntry["state"] = "disabled"
@@ -446,45 +453,37 @@ class TkinterApp():
         self.measurer_instance.outputFolder = TkinterApp.folder_path.get()
         self.measurer_instance.format = TkinterApp.outputFormatVariable.get()
         
-        skeletonThread = threading.Thread(target=Cameras.TriggerAnalysis, daemon=True)
-        skeletonThread.start()
+        self.skeletonThread = threading.Thread(target=Cameras.TriggerAnalysis, daemon=True)
+        self.skeletonThread.start()
     
-        self.startButton.after(1000, self.ReinstateSettings, skeletonThread)
+        self.startButton.after(500, self.ReinstateSettings, self.skeletonThread)
     
     def ReinstateSettings(self, thread):
         if thread.is_alive():
-            if MeasurerInstance.processingFrame is None:
+            if not MeasurerInstance.processingFrame:
                 self.startButton["text"] = "COLLECTING..."
             else:
                 self.startButton["text"] = "FRAME " + str(MeasurerInstance.processingFrame + 1) + "/" + str(int(Cameras.number_of_frames))
             
-            self.startButton.after(1000, self.ReinstateSettings, thread)
+            self.startButton.after(500, self.ReinstateSettings, thread)
         else:
             self.current_state = 1
+            MeasurerInstance.stop = False
             
-            print("reinstating settings")
+            print("Reinstating settings")
             TkinterApp.numberFramesSetting.Activate(True)
-            self.ActivateBackgroundButton(True)
-            self.ActivateStartButton(True)
+            self.BackgroundButtonState()
+            self.StartButtonState()
             
             TkinterApp.fishIDEntry["state"] = "normal"
             TkinterApp.additionalText["state"] = "normal"
             TkinterApp.w["state"] = "normal"
             TkinterApp.button["state"] = "normal"
             
-
     def SBInCorrectState(self):
         if (self.current_state == 0 or self.current_state == 2) and str(self.startButton['state']) != "disabled":
             return False
         elif self.current_state == 1 and str(self.startButton['state']) != "normal":
-            return False
-        else:
-            return True
-        
-    def BGBInCorrectState(self):
-        if (self.current_state == 0 or self.current_state == 1) and str(self.startButton['state']) != "normal":
-            return False
-        elif self.current_state == 2 and str(self.startButton['state']) != "disabled":
             return False
         else:
             return True

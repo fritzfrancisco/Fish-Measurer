@@ -5,11 +5,10 @@ import astropy.units as u
 from skimage import img_as_bool
 from skimage.morphology import medial_axis, binary_closing, binary_opening
 from scipy.signal import find_peaks
-import os
 import PointUtils
 from LongPathElement import LongPathElement
 
-class Measurement():
+class ProcessingInstance():
     def __init__(self, process_id, raw_frame, binarized_frame, outputfolder):
         # Direct attributions
         self.process_id = process_id
@@ -99,13 +98,13 @@ class Measurement():
         self.filament.rht_branch_analysis()
         
         # Head point operations
-        self.head_point = Measurement.FindHeadPoint(self.filament, self.distance_transform)
-        base_branch_index = Measurement.GetBranchFromPoint(self.head_point, self.filament)[0]
+        self.head_point = ProcessingInstance.FindHeadPoint(self.filament, self.distance_transform)
+        base_branch_index = ProcessingInstance.GetBranchFromPoint(self.head_point, self.filament)[0]
         print("starting branch is branch {0}".format(base_branch_index))
         self.longest_path_branch_indices.append(base_branch_index)
         
-        intersection_points, intersection_indices = Measurement.GetBranchIntersections(base_branch_index, also_indices=True)
-        end_points, end_indices = Measurement.GetBranchEndPoints(base_branch_index, also_indices=True)
+        intersection_points, intersection_indices = ProcessingInstance.GetBranchIntersections(base_branch_index, also_indices=True)
+        end_points, end_indices = ProcessingInstance.GetBranchEndPoints(base_branch_index, also_indices=True)
         self.long_path_elements.append(LongPathElement(base_branch_index, intersection_points, intersection_indices, end_points, end_indices))
         
         # Recursively construct the longest path network
@@ -148,8 +147,7 @@ class Measurement():
         connectors_list = [element.head_point for element in self.long_path_elements]
         self.long_path_binary = PointUtils.AddThickBinaryDots(self.long_path_binary, *connectors_list, size=(5,5))
         
-        
-        
+        # Final touches
         self.skeleton_contour = np.rint((self.long_path_binary * 255 + self.contour)/2).astype('uint8')
         self.processed_frame = cv2.addWeighted(self.skeleton_contour,0.65,cv2.cvtColor(self.raw_frame, cv2.COLOR_BGR2GRAY).astype('uint8'),0.35,0)
         
@@ -172,7 +170,7 @@ class Measurement():
                 return False
         else:
             # Get the raw intersection point(s)
-            intersection_points, intersection_indices = Measurement.GetBranchIntersections(base_branch_index, also_indices=True)
+            intersection_points, intersection_indices = ProcessingInstance.GetBranchIntersections(base_branch_index, also_indices=True)
             
             # Remove duplicates and points that have already been covered
             intersec_pts_on_basebranch_indices = []
@@ -196,7 +194,7 @@ class Measurement():
                 for index in intersec_pts_on_basebranch_indices:
                     contending_intersec_pts = self.filament.intersec_pts[index] if isinstance(self.filament.intersec_pts[index], list) else [self.filament.intersec_pts[index]]
                     for point in contending_intersec_pts:
-                        possible_branches = Measurement.GetBranchFromPoint(point, self.filament, (5,5))
+                        possible_branches = ProcessingInstance.GetBranchFromPoint(point, self.filament, (5,5))
                         if possible_branches:
                             # Add it if it hasn't already been considered, and if it's not already on the long path
                             [connected_branch_indices.append(branch) for branch in possible_branches if branch not in connected_branch_indices and branch not in self.longest_path_branch_indices]
@@ -226,8 +224,8 @@ class Measurement():
                     print("Branch {0} is most aligned, adding".format(best_aligned_index))
                     self.longest_path_branch_indices.append(best_aligned_index)
                     
-                    intersection_points, intersection_indices = Measurement.GetBranchIntersections(best_aligned_index, also_indices=True)
-                    end_points, end_indices = Measurement.GetBranchEndPoints(best_aligned_index, also_indices=True)
+                    intersection_points, intersection_indices = ProcessingInstance.GetBranchIntersections(best_aligned_index, also_indices=True)
+                    end_points, end_indices = ProcessingInstance.GetBranchEndPoints(best_aligned_index, also_indices=True)
                     self.long_path_elements.append(LongPathElement(best_aligned_index, intersection_points, intersection_indices, end_points, end_indices))
                     
                     if self.RecursiveBranching(best_aligned_index):
@@ -285,7 +283,7 @@ class Measurement():
             
     def TrimSLPLength(self):
         # Which branch of the longest path contains the SLP?
-        slp_index = Measurement.GetBranchFromPoint(self.standard_length_point, self.filament)
+        slp_index = ProcessingInstance.GetBranchFromPoint(self.standard_length_point, self.filament)
         if slp_index:
             long_path_branch_indices = [element.branch_index for element in self.long_path_elements]
             
@@ -315,7 +313,7 @@ class Measurement():
             element.total_adjusted_length -= length_to_remove
             element.tail_point = map(tuple, element.ordered_branch_points_adjusted[-1,:])
             
-            # Apply these changes to the overall Measurement
+            # Apply these changes to the overall ProcessingInstance
             bool_array = PointUtils.ContainsMutualPoints(points_to_remove, self.long_path_pixel_coords)
             self.long_path_pixel_coords = self.long_path_pixel_coords[np.where(np.invert(bool_array))]
             self.fil_length_pixels -= length_to_remove
@@ -331,7 +329,7 @@ class Measurement():
         pullback_pts = []
 
         # For the head point, use a circle of radius 20 pixels to find a point further back on the skeleton
-        head_pullback_pt = Measurement.CircleMaskIntersection(self.head_point, self.long_path_pixel_coords, self.dimensions)
+        head_pullback_pt = ProcessingInstance.CircleMaskIntersection(self.head_point, self.long_path_pixel_coords, self.dimensions)
         if head_pullback_pt is None:
             print("Head pullback does not intersect with the long path")
             return False
@@ -345,7 +343,7 @@ class Measurement():
             pullback_pts.append(self.standard_length_point)
             print("Using standard length point for tail pullback, at {0}".format(self.standard_length_point))
         else:
-            tail_pullback_pt = Measurement.CircleMaskIntersection(self.tail_point, self.long_path_pixel_coords, self.dimensions)
+            tail_pullback_pt = ProcessingInstance.CircleMaskIntersection(self.tail_point, self.long_path_pixel_coords, self.dimensions)
             if tail_pullback_pt is None:
                 print("Tail pullback does not intersect with the long path")
                 return False
