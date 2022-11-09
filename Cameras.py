@@ -155,7 +155,7 @@ class Cameras():
                 
             Cameras.lock.release()
                 
-            print(str(len(raw_list)) + " out of " + str(images_to_grab))
+            print("{0} out of {1:.0f}".format(len(raw_list), images_to_grab))
             time.sleep(1/Cameras.framerate)
             
         return (raw_list, binarized_list)

@@ -31,8 +31,8 @@ class LongPathElement:
         Returns:
             bool: Whether the operation completed successfully
         """
-        # Perform point ordering to 100% certify resulting order
-        base_branch_points = PointUtils.OptimizePath(base_branch_points)
+        # Perform an explicit point ordering to 100% certify resulting order
+        base_branch_points = np.asarray(PointUtils.OptimizePath(base_branch_points.tolist(), start=self.head_point))
         
         # Base attributions
         self.ordered_branch_points_full = base_branch_points
@@ -42,31 +42,15 @@ class LongPathElement:
         self.unit_length = self.total_pixel_length / len(self.ordered_branch_points_full)
         print("Branch contains {0} points and is {1:.2f} pixels long".format(np.shape(self.ordered_branch_points_full)[0], self.total_pixel_length))
         
-        # Ensure the branch is ordered from head point to tail point
-        head_kernel = (np.argwhere(cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))) + self.head_point - (2,2))
-        head_bool_array = PointUtils.ContainsMutualPoints(head_kernel, base_branch_points, return_array=True)
-        if not any(head_bool_array):
-            return False
-        head_index = np.argwhere(head_bool_array)[0][0]
-        
-        tail_kernel = (np.argwhere(cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))) + self.tail_point - (2,2))
-        tail_bool_array = PointUtils.ContainsMutualPoints(tail_kernel, base_branch_points, return_array=True)
-        if not any(tail_bool_array):
-            return False
-        tail_index = np.argwhere(tail_bool_array)[0][-1]
-        
-        # TODO: If the branch is very small, say 3 pixels, the tail point will incorrectly be considered "at the end" of the branch despite being at the front due to the (5,5) kernel size
-        print("Head index: {0}; tail index: {1}".format(head_index, tail_index))
-        if head_index > tail_index:
-            print("Branch orientation is from tail to head, reversing")
-            self.ordered_branch_points_full = np.flip(self.ordered_branch_points_full, axis=0)
-        else:
-            print("Branch is correctly oriented")
-        
         # Determine if the head and tail points are at the extremes of the branch or not and adjust accoringly
-        # It's important to start with the tail first, otherwise the indices found above will be invalidated
         if not PointUtils.PointInNeighborhood(self.tail_point, self.ordered_branch_points_adjusted[-1]):
             # The tail point occurs somewhere mid-branch, we need to trim from that point on
+            tail_kernel = (np.argwhere(cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))) + self.tail_point - (2,2))
+            tail_bool_array = PointUtils.ContainsMutualPoints(tail_kernel, self.ordered_branch_points_adjusted)
+            if not any(tail_bool_array):
+                return False
+            tail_index = np.argwhere(tail_bool_array)[0][-1]
+
             trimmed_length = (len(self.ordered_branch_points_adjusted) - tail_index) * self.unit_length
             self.total_adjusted_length -= trimmed_length
             self.ordered_branch_points_adjusted = self.ordered_branch_points_adjusted[:tail_index+1, :]
@@ -76,6 +60,12 @@ class LongPathElement:
             
         if not PointUtils.PointInNeighborhood(self.head_point, self.ordered_branch_points_adjusted[0]):
             # The head point occurs somewhere mid-branch, we need to trim up until that point
+            head_kernel = (np.argwhere(cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))) + self.head_point - (2,2))
+            head_bool_array = PointUtils.ContainsMutualPoints(head_kernel, self.ordered_branch_points_adjusted)
+            if not any(head_bool_array):
+                return False
+            head_index = np.argwhere(head_bool_array)[0][0]
+                        
             trimmed_length = head_index * self.unit_length
             self.total_adjusted_length -= trimmed_length
             self.ordered_branch_points_adjusted = self.ordered_branch_points_adjusted[head_index:, :]

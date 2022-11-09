@@ -324,7 +324,7 @@ class TkinterApp():
         else:
             self.backgroundButton["text"] = "PLS CALIBRATE"
             if str(self.backgroundButton['state']) == "normal":
-                self.BackgroundButtonState(disabled=True)
+                self.BackgroundButtonState(disable=True)
             self.backgroundButton.after(500, self.CheckIfCalibrated)
         
     def BackgroundButtonProcessing(self, label, thread):
@@ -432,7 +432,7 @@ class TkinterApp():
             
         elif self.current_state == 2:
             # Interrupt the run and return to the trained instance
-            self.BackgroundButtonState(disabled=True)
+            self.BackgroundButtonState(disable=True)
             
             # Kill the thread, and the ReinstateSettings() method will handle the reinstating of the state and buttons
             MeasurerInstance.stop = True

@@ -19,9 +19,10 @@ class MeasurerInstance():
         MeasurerInstance.fishID = None
         MeasurerInstance.addText = None
         MeasurerInstance.errors = {key: [] for key in ["interrupt"]}
-        MeasurerInstance.processingFrames = None
+        MeasurerInstance.processingFrame = None
         MeasurerInstance.stop = False
-
+        MeasurerInstance.trial_count = 0
+        
         Cameras.ConnectMeasurer(self)
 
     def SubtractBackground(self, frame):
@@ -103,6 +104,7 @@ class MeasurerInstance():
         if not MeasurerInstance.stop:
             if self.measurements:
                 refined_list = MeasurerInstance.RunStatistics(self.measurements)
+                MeasurerInstance.trial_count = len(refined_list)
                 
                 if not refined_list:
                     # Effectively interrupts the flow, the method ends after this block
@@ -188,11 +190,11 @@ class MeasurerInstance():
         
         # # Watermark and save all subsequent images
         for instance in measurements:  
-        #     cv2.imwrite(os.path.join(frames_path, "raw-{0}{1}".format(instance.process_id, self.format)), instance.raw_frame)
+            cv2.imwrite(os.path.join(frames_path, "raw-{0}{1}".format(instance.process_id, format)), instance.raw_frame)
             
-            # if instance.process_id == closest_index:
-            #     cv2.imwrite(os.path.join(frames_path, "watermarked-{0}{1}".format(instance.process_id, self.format)), chosen_image)
-            # else:
-            watermarked_image = MeasurerInstance.WatermarkImage(instance)
-            cv2.imwrite(os.path.join(frames_path, "watermarked-{0}{1}".format(instance.process_id, format)), watermarked_image)
+            if instance.process_id == closest_index:
+                cv2.imwrite(os.path.join(frames_path, "watermarked-{0}{1}".format(instance.process_id, format)), chosen_image)
+            else:
+                watermarked_image = MeasurerInstance.WatermarkImage(instance)
+                cv2.imwrite(os.path.join(frames_path, "watermarked-{0}{1}".format(instance.process_id, format)), watermarked_image)
 

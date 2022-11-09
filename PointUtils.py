@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 
-def AddThickBinaryDots(array, size=(7,7), *args):
+def AddThickBinaryDots(array, *args, size=(7,7)):
     for origin in args:
         kernel = (np.argwhere(cv2.getStructuringElement(cv2.MORPH_ELLIPSE,size)) + origin - ((np.asarray(size) - 1) / 2).astype('uint8'))
         array[kernel[:,0], kernel[:,1]] = 1
@@ -65,7 +65,8 @@ def OptimizePath(coords, start=None):
         start = coords[0]
     pass_by = coords
     path = [start]
-    pass_by.remove(start)
+    if start in pass_by:
+        pass_by.remove(start)
     while pass_by:
         nearest = min(pass_by, key=lambda x: Distance(path[-1], x))
         path.append(nearest)
