@@ -5,22 +5,39 @@ import statistics
 import os
 from datetime import datetime
 import pandas as pd
+import concurrent.futures as cf
 
 from ProcessingInstance import ProcessingInstance
 
 class MeasurerInstance():
     def __init__(self):
-        ## 26.35
+        # Instance variables
+        # Set by app_constructor.py, once the start button is pressed
         self.outputFolder = None
         self.format = None
+        
+        # Folders where the each instance will save its respective images
+        self.target_folder = None
+        self.raw_folder = None
+        self.skeleton_LP_folder = None
+        self.watermarked_folder = None
+        
+        # Error handling
         self.background_is_trained = False
         self.block_tkinter_start_button = False
+        
+        # Class variables
+        # Controlled by app_constructor.py
         MeasurerInstance.threshold = None 
         MeasurerInstance.fishID = None
         MeasurerInstance.addText = None
+        
+        # Error handling and aborting the run
         MeasurerInstance.errors = {key: [] for key in ["interrupt"]}
-        MeasurerInstance.processingFrame = None
         MeasurerInstance.stop = False
+        
+        # Iterative Instancing
+        MeasurerInstance.processingFrame = None
         MeasurerInstance.trial_count = 0
         
         Cameras.ConnectMeasurer(self)
@@ -61,42 +78,67 @@ class MeasurerInstance():
         self.measurements = []
         (raw, binarized) = frames
         
-        # Create the destination folder and folder within it for the individual frames
-        target_folder_name = None
-        if MeasurerInstance.fishID != None and MeasurerInstance.fishID != '':
-            target_folder_name = os.path.join(self.outputFolder, str(datetime.now().strftime("%d-%m-%Y_%H-%M-%S")) + \
-                "_ID-" + str(MeasurerInstance.fishID))
-        else:
-            target_folder_name = os.path.join(self.outputFolder, str(datetime.now().strftime("%d-%m-%Y_%H-%M-%S")))
-        
-        if not os.path.isdir(target_folder_name):
-            os.mkdir(target_folder_name)
-
-        frames_path = os.path.join(target_folder_name, "frames")
-        if not os.path.isdir(frames_path):
-            os.mkdir(frames_path)
+        # Make the target location for image writing on the system
+        self.CreateFolderStructure()
         
         # Run through each frame and process it
+        instances = []
         for i in range(len(raw)):
             if MeasurerInstance.stop:
                 break
             
             MeasurerInstance.processingFrame = i
             current_measurement = ProcessingInstance(i, raw[i], binarized[i], self.outputFolder)
-            
-            # Initialize the frame processing instance
-            if current_measurement.successful_init and not MeasurerInstance.stop:
-                extended_frames_path = os.path.join(frames_path, str(i) + str(self.format))
-                cv2.imwrite(extended_frames_path, current_measurement.skeleton)
+            if current_measurement.successful_init:
+                instances.append(current_measurement)
                 
-                # Add it to the pool if successfully initialized
-                if current_measurement.ConstructLongestPath() and not MeasurerInstance.stop:
-                    self.measurements.append(current_measurement)
-                    print("Frame: {0}; length (pix): {1:.2f}; length (cm): {2:.2f}".format(i, current_measurement.fil_length_pixels, Cameras.ConvertPixelsToLength(current_measurement.fil_length_pixels)))
+        # create a thread pool with the default number of worker threads
+        executor = cf.ThreadPoolExecutor()
+        
+        # https://stackoverflow.com/questions/67219755/python-threadpoolexecutor-map-with-instance-methods
+        if not MeasurerInstance.stop:              
+            futures = [executor.submit(instance.ConstructLongestPath) for instance in instances]
+            
+            # Wait for all tasks to complete
+            # done, not_done =  cf.wait(futures)
+            
+            for future in cf.as_completed(futures):
+                # get the result for the next completed task
+                instance = future.result() # blocks
+                if instance.successful_pathing:
+                    self.measurements.append(instance)
+                    print("\n".join(instance.output_log))
+                    print("Frame: {0}; length (pix): {1:.2f}; length (cm): {2:.2f}".format(instance.process_id, instance.fil_length_pixels, Cameras.ConvertPixelsToLength(instance.fil_length_pixels)))
 
-                    skeleton_frames_path = os.path.join(frames_path, "full_skeleton_{0}{1}".format(i, self.format))
-                    cv2.imwrite(skeleton_frames_path, current_measurement.skeleton_contour)
-                    
+                    # Save the images
+                    cv2.imwrite(os.path.join(self.raw_folder, "raw-{0}{1}".format(instance.process_id, self.format)), instance.raw_frame)
+                    cv2.imwrite(os.path.join(self.skeleton_LP_folder, "skeleton_LP-{0}{1}".format(instance.process_id, self.format)), instance.skeleton_contour)
+        
+            executor.shutdown()
+       
+                
+            
+            # for instance in done.result():
+            #     if instance.successful_pathing:
+            #         self.measurements.append(current_measurement)
+            #         print("Frame: {0}; length (pix): {1:.2f}; length (cm): {2:.2f}".format(i, current_measurement.fil_length_pixels, Cameras.ConvertPixelsToLength(current_measurement.fil_length_pixels)))
+
+            #         # Save the images
+            #         cv2.imwrite(os.path.join(self.raw_folder, "raw-{0}{1}".format(current_measurement.process_id, self.format)), current_measurement.raw_frame)
+            #         cv2.imwrite(os.path.join(self.skeleton_LP_folder, "skeleton_LP-{0}{1}".format(current_measurement.process_id, self.format)), current_measurement.skeleton_contour)
+        
+       
+            # # Initialize the frame processing instance
+            # if current_measurement.successful_init and not MeasurerInstance.stop:               
+            #     # Add it to the pool if successfully initialized
+            #     if current_measurement.ConstructLongestPath() and not MeasurerInstance.stop:
+            #         self.measurements.append(current_measurement)
+            #         print("Frame: {0}; length (pix): {1:.2f}; length (cm): {2:.2f}".format(i, current_measurement.fil_length_pixels, Cameras.ConvertPixelsToLength(current_measurement.fil_length_pixels)))
+
+            #         # Save the images
+            #         cv2.imwrite(os.path.join(self.raw_folder, "raw-{0}{1}".format(current_measurement.process_id, self.format)), current_measurement.raw_frame)
+            #         cv2.imwrite(os.path.join(self.skeleton_LP_folder, "skeleton_LP-{0}{1}".format(current_measurement.process_id, self.format)), current_measurement.skeleton_contour)
+        
         # For Tkinter ReinstateSettings()                    
         MeasurerInstance.processingFrame = None
         
@@ -114,7 +156,7 @@ class MeasurerInstance():
                     if error_message not in MeasurerInstance.errors["interrupt"]:
                         MeasurerInstance.errors["interrupt"].append(error_message)
                 else:
-                    MeasurerInstance.ExportData(frames_path, target_folder_name, self.format, self.measurements)
+                    MeasurerInstance.ExportData(self.watermarked_folder, self.target_folder, self.format, self.measurements)
             else:
                 # Effectively interrupts the flow, the method ends after this block
                 error_message = "No length values could be obtained from the collected images. Either the blob was too small and filtered out, or the skeletonization process was too complex and failed. Please try again"
@@ -190,11 +232,38 @@ class MeasurerInstance():
         
         # # Watermark and save all subsequent images
         for instance in measurements:  
-            cv2.imwrite(os.path.join(frames_path, "raw-{0}{1}".format(instance.process_id, format)), instance.raw_frame)
-            
             if instance.process_id == closest_index:
                 cv2.imwrite(os.path.join(frames_path, "watermarked-{0}{1}".format(instance.process_id, format)), chosen_image)
             else:
                 watermarked_image = MeasurerInstance.WatermarkImage(instance)
                 cv2.imwrite(os.path.join(frames_path, "watermarked-{0}{1}".format(instance.process_id, format)), watermarked_image)
 
+    def CreateFolderStructure(self):
+        # Create the destination folder and folder within it for the individual frames
+        # Start with the instance folder at the top of the hierarchy
+        self.target_folder = None
+        if MeasurerInstance.fishID != None and MeasurerInstance.fishID != '':
+            self.target_folder = os.path.join(self.outputFolder, str(datetime.now().strftime("%d-%m-%Y_%H-%M-%S")) + \
+                "_ID-" + str(MeasurerInstance.fishID))
+        else:
+            self.target_folder = os.path.join(self.outputFolder, str(datetime.now().strftime("%d-%m-%Y_%H-%M-%S")))
+        
+        if not os.path.isdir(self.target_folder):
+            os.mkdir(self.target_folder)
+
+        # Create the frames directory, and then the subsequent three sub-directories
+        frames_path = os.path.join(self.target_folder, "frames")
+        if not os.path.isdir(frames_path):
+            os.mkdir(frames_path)
+            
+        self.watermarked_folder = os.path.join(frames_path, "watermarked")
+        if not os.path.isdir(self.watermarked_folder):
+            os.mkdir(self.watermarked_folder)
+            
+        self.raw_folder = os.path.join(frames_path, "raw")
+        if not os.path.isdir(self.raw_folder):
+            os.mkdir(self.raw_folder)
+        
+        self.skeleton_LP_folder = os.path.join(frames_path, "skeleton_and_longpath")
+        if not os.path.isdir(self.skeleton_LP_folder):
+            os.mkdir(self.skeleton_LP_folder)

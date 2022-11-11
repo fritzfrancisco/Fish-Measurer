@@ -33,6 +33,8 @@ class ProcessingInstance():
 
         # State information
         self.successful_init = True
+        self.successful_pathing = False
+        self.output_log = []
 
         # Longest path variables
         self.longest_path_branch_indices = []
@@ -76,7 +78,7 @@ class ProcessingInstance():
         try:
             self.fil_finder.analyze_skeletons(skel_thresh=1*u.pix)
         except ValueError:
-            print("Filfinder error")
+            self.output_log.append("Filfinder error")
             self.successful_init = False
 
         # Grab the relevant filament
@@ -88,33 +90,33 @@ class ProcessingInstance():
             else:
                 self.filament = self.fil_finder.filaments[0]
         except:
-            print("could not grab filament")
+            self.output_log.append("could not grab filament")
             self.successful_init = False
 
     def ConstructLongestPath(self):
         self.number_of_branches = len(self.filament.branch_properties["length"])
-        print("\nSkeleton contains {0} branches".format(self.number_of_branches))
+        self.output_log.append("\nSkeleton contains {0} branches".format(self.number_of_branches))
 
         self.filament.rht_branch_analysis()
         
         # Head point operations
-        self.head_point = ProcessingInstance.FindHeadPoint(self.filament, self.distance_transform)
+        self.head_point = self.FindHeadPoint(self.filament, self.distance_transform)
         base_branch_index = ProcessingInstance.GetBranchFromPoint(self.head_point, self.filament)[0]
-        print("starting branch is branch {0} with {1} pixels and a length of {2:.2f}".format(base_branch_index, len(self.filament.branch_pts(True)[base_branch_index]), self.filament.branch_properties["length"][base_branch_index].value))
+        self.output_log.append("starting branch is branch {0} with {1} pixels and a length of {2:.2f}".format(base_branch_index, len(self.filament.branch_pts(True)[base_branch_index]), self.filament.branch_properties["length"][base_branch_index].value))
         self.longest_path_branch_indices.append(base_branch_index)
         
-        intersection_points, intersection_indices = ProcessingInstance.GetBranchIntersections(base_branch_index, self.filament, also_indices=True)
-        end_points, end_indices = ProcessingInstance.GetBranchEndPoints(base_branch_index, self.filament, also_indices=True)
+        intersection_points, intersection_indices = self.GetBranchIntersections(base_branch_index, self.filament, also_indices=True)
+        end_points, end_indices = self.GetBranchEndPoints(base_branch_index, self.filament, also_indices=True)
         self.long_path_elements.append(LongPathElement(base_branch_index, intersection_points, intersection_indices, end_points, end_indices))
         
         # Recursively construct the longest path network
         if not self.RecursiveBranching(base_branch_index):
-            print("Issue with LP recursion, aborting.")
+            self.output_log.append("Issue with LP recursion, aborting.")
             return False
 
         # Can maybe do this at the same time as the recursive branching
         if not self.ConstructOrderedLongPathCoordinates():
-            print("Issue with ordering and trimming, aborting.")
+            self.output_log.append("Issue with ordering and trimming, aborting.")
             return False
         
         self.long_path_pixel_coords = np.asarray(self.long_path_pixel_coords)
@@ -122,18 +124,18 @@ class ProcessingInstance():
         # Ensure that the long path operation was successful and meaningful by checking if
         # it's within some tolerance of the FilFinder value
         if self.fil_length_pixels < 0.7 * self.filament.length(u.pix).value or self.fil_length_pixels > 1.3 * self.filament.length(u.pix).value:
-            print("Length {0:.2f} failed to be within expected range [{1:.2f}, {2:.2f}]".format(self.fil_length_pixels, 0.7 * self.filament.length(u.pix).value, 1.3 * self.filament.length(u.pix).value))
+            self.output_log.append("Length {0:.2f} failed to be within expected range [{1:.2f}, {2:.2f}]".format(self.fil_length_pixels, 0.7 * self.filament.length(u.pix).value, 1.3 * self.filament.length(u.pix).value))
             return False
         else:
-            print("Length {0:.2f} within expected range [{1:.2f}, {2:.2f}]".format(self.fil_length_pixels, 0.7 * self.filament.length(u.pix).value, 1.3 * self.filament.length(u.pix).value))
+            self.output_log.append("Length {0:.2f} within expected range [{1:.2f}, {2:.2f}]".format(self.fil_length_pixels, 0.7 * self.filament.length(u.pix).value, 1.3 * self.filament.length(u.pix).value))
 
         # Long path is assembled, start peripheral operations
-        print("Finding SLP...")
+        self.output_log.append("Finding SLP...")
         if not self.FindStandardLengthPoint():
-            print("Issue with SLP, aborting.")
+            self.output_log.append("Issue with SLP, aborting.")
             return False
 
-        print("Adding contour distances...")
+        self.output_log.append("Adding contour distances...")
         if not self.AddContourDistances():
             return False
         
@@ -148,45 +150,50 @@ class ProcessingInstance():
         self.long_path_binary = PointUtils.AddThickBinaryDots(self.long_path_binary, *connectors_list, size=(5,5))
         
         # Final touches
-        self.skeleton_contour = np.rint((self.long_path_binary * 255 + self.contour)/2).astype('uint8')
-        self.processed_frame = cv2.addWeighted(self.skeleton_contour,0.65,cv2.cvtColor(self.raw_frame, cv2.COLOR_BGR2GRAY).astype('uint8'),0.35,0)
+        longpath_dilated = cv2.dilate(np.rint(self.long_path_binary * 255).astype('uint8'), cv2.getStructuringElement(cv2.MORPH_RECT,(3,3)),iterations = 1)
+        skeleton_contour = (self.skeleton + self.contour).astype('uint8')
+        self.skeleton_contour = cv2.addWeighted(longpath_dilated,0.3,skeleton_contour,0.7,0)
+        
+        longpath_contour = np.rint((self.long_path_binary * 255 + self.contour) / 2).astype('uint8')
+        self.processed_frame = cv2.addWeighted(longpath_contour,0.65,cv2.cvtColor(self.raw_frame, cv2.COLOR_BGR2GRAY).astype('uint8'),0.35,0)
         
         # image = self.processed_frame
         # temp = cv2.resize(image, None, fy=0.5, fx=0.5)
         # cv2.imshow("processed", temp)
         # cv2.waitKey(0)
         
-        return True
+        self.successful_pathing = True
+        return self
 
     def RecursiveBranching(self, base_branch_index):
         if len(self.covered_intersec_pt_indices) == len(self.filament.intersec_pts):
             # There are no more intersection points to evaluate, we've looked at them all
-            print("We're done-so's, all intersection points have been assessed")
+            self.output_log.append("We're done-so's, all intersection points have been assessed")
             if self.long_path_elements[-1].end_pts:
                 self.tail_point = [end_point for end_point in self.long_path_elements[-1].end_pts if end_point not in [self.head_point]][0]
                 return True
             else:
-                print("Did not find the endpoint on the terminal branch")
+                self.output_log.append("Did not find the endpoint on the terminal branch")
                 return False
         else:
             # Get the raw intersection point(s)
-            intersection_points, intersection_indices = ProcessingInstance.GetBranchIntersections(base_branch_index, self.filament, also_indices=True)
+            intersection_points, intersection_indices = self.GetBranchIntersections(base_branch_index, self.filament, also_indices=True)
             
             # Remove duplicates and points that have already been covered
             intersec_pts_on_basebranch_indices = []
             
             [intersec_pts_on_basebranch_indices.append(index) for index in intersection_indices if index not in self.covered_intersec_pt_indices and index not in intersec_pts_on_basebranch_indices]
             self.covered_intersec_pt_indices.extend(intersec_pts_on_basebranch_indices)
-            print("Indices not yet covered: {0}".format(intersec_pts_on_basebranch_indices))
+            self.output_log.append("Indices not yet covered: {0}".format(intersec_pts_on_basebranch_indices))
             
             if not intersec_pts_on_basebranch_indices:
                 # The end of the branch must be an endpoint, we're done
-                print("We're done-so's, no intersection points found on the base branch")
+                self.output_log.append("We're done-so's, no intersection points found on the base branch")
                 if self.long_path_elements[-1].end_pts:
                     self.tail_point = [end_point for end_point in self.long_path_elements[-1].end_pts if end_point not in [self.head_point]][0]
                     return True
                 else:
-                    print("Did not find the endpoint on the terminal branch")
+                    self.output_log.append("Did not find the endpoint on the terminal branch")
                     return False
             else:
                 # Find which other branches also share this intersection point(s)
@@ -199,7 +206,7 @@ class ProcessingInstance():
                             # Add it if it hasn't already been considered, and if it's not already on the long path
                             [connected_branch_indices.append(branch) for branch in possible_branches if branch not in connected_branch_indices and branch not in self.longest_path_branch_indices]
                             
-                print("Possible next branches are: {0}".format(connected_branch_indices))
+                self.output_log.append("Possible next branches are: {0}".format(connected_branch_indices))
 
                 # Compare the orientations of all contending branches to the base branch to select the next leg
                 base_branch_orientation = self.filament.orientation_branches[base_branch_index]
@@ -215,18 +222,18 @@ class ProcessingInstance():
                         best_aligned_distance = contending_distance
                     else:
                         if contending_distance < best_aligned_distance:
-                            print("Branch {0}: {1} is better aligned than branch {2}: {3}".format(branch_index, contending_distance, best_aligned_index, best_aligned_distance))
+                            self.output_log.append("Branch {0}: {1} is better aligned than branch {2}: {3}".format(branch_index, contending_distance, best_aligned_index, best_aligned_distance))
                             best_aligned_index = branch_index
                             best_aligned_distance = contending_distance
 
                 # Add this branch to the longest path and run through again with an updated base branch
                 if best_aligned_index is not None:
-                    print("Branch {0} with {1} pixels and a length of {2} is most aligned, adding".format(best_aligned_index, len(self.filament.branch_pts(True)[best_aligned_index]), self.filament.branch_properties["length"][best_aligned_index].value))
+                    self.output_log.append("Branch {0} with {1} pixels and a length of {2} is most aligned, adding".format(best_aligned_index, len(self.filament.branch_pts(True)[best_aligned_index]), self.filament.branch_properties["length"][best_aligned_index].value))
                     
                     self.longest_path_branch_indices.append(best_aligned_index)
                     
-                    intersection_points, intersection_indices = ProcessingInstance.GetBranchIntersections(best_aligned_index, self.filament, also_indices=True)
-                    end_points, end_indices = ProcessingInstance.GetBranchEndPoints(best_aligned_index, self.filament, also_indices=True)
+                    intersection_points, intersection_indices = self.GetBranchIntersections(best_aligned_index, self.filament, also_indices=True)
+                    end_points, end_indices = self.GetBranchEndPoints(best_aligned_index, self.filament, also_indices=True)
                     self.long_path_elements.append(LongPathElement(best_aligned_index, intersection_points, intersection_indices, end_points, end_indices))
                     
                     if self.RecursiveBranching(best_aligned_index):
@@ -234,7 +241,7 @@ class ProcessingInstance():
                     else:
                         return False
                 else:
-                    print("Intersection point exists, but no branches are connected...? Long path failure, aborting.")
+                    self.output_log.append("Intersection point exists, but no branches are connected...? Long path failure, aborting.")
                     return False
 
     def FindStandardLengthPoint(self):
@@ -243,8 +250,8 @@ class ProcessingInstance():
         average_distance = np.average(longpath_distance_array)
         local_minima_indices, _ = find_peaks(-longpath_distance_array, height=-average_distance, prominence=1)
         
-        print("Possible SLPs at indices: {0}".format(local_minima_indices))
-        print("Corresponding values: {0}".format(self.long_path_pixel_coords[local_minima_indices]))
+        self.output_log.append("Possible SLPs at indices: {0}".format(local_minima_indices))
+        self.output_log.append("Corresponding values: {0}".format(self.long_path_pixel_coords[local_minima_indices]))
             
         if local_minima_indices.size > 0:
             # The relevant index, if it exists, will be likely around 60-90% of the way along head --> tail of the fish
@@ -252,22 +259,22 @@ class ProcessingInstance():
             long_path_length = len(self.long_path_pixel_coords)
             lb = round(0.6 * long_path_length)
             ub = round(0.9 * long_path_length)
-            print("Feasible bounds: {0}, {1}".format(lb, ub))
+            self.output_log.append("Feasible bounds: {0}, {1}".format(lb, ub))
             
             feasible_indices = np.asarray(np.where((local_minima_indices >= lb) & (local_minima_indices <= ub)))
             if feasible_indices.size > 0:
-                print("Feasible SLPs at indices: {0}".format(local_minima_indices[feasible_indices]))
+                self.output_log.append("Feasible SLPs at indices: {0}".format(local_minima_indices[feasible_indices]))
                 mindist_feasible_index = np.argmin(longpath_distance_array[feasible_indices])
                 global_index = (local_minima_indices[feasible_indices])[0][mindist_feasible_index]
 
                 self.standard_length_point = self.long_path_pixel_coords[global_index]
-                print("Standard length point found at index {2} of {3}: {0}; Tailpoint: {1}".format(self.standard_length_point, self.tail_point, global_index, len(self.long_path_pixel_coords)))
+                self.output_log.append("Standard length point found at index {2} of {3}: {0}; Tailpoint: {1}".format(self.standard_length_point, self.tail_point, global_index, len(self.long_path_pixel_coords)))
                 
                 # Check whether the SLP meaningfully exists, or whether it's basically the tail endpoint
                 self.slp_near_endpoint = False
                 if PointUtils.PointInNeighborhood(self.standard_length_point, self.tail_point, size=(41,41)):
                     self.slp_near_endpoint = True
-                    print("SLP =~ Tailpoint")
+                    self.output_log.append("SLP =~ Tailpoint")
                     return True
                 else:
                     if not self.TrimSLPLength():
@@ -275,12 +282,12 @@ class ProcessingInstance():
                     else:
                         return True
             else:
-                print("All feasible SLP potentials weeded out")
+                self.output_log.append("All feasible SLP potentials weeded out")
                 self.standard_length_point = None
                 self.slp_near_endpoint = True
                 return True
         else:
-            print("No SLP potentials found")
+            self.output_log.append("No SLP potentials found")
             self.standard_length_point = None
             self.slp_near_endpoint = True
             return True
@@ -292,20 +299,20 @@ class ProcessingInstance():
             long_path_branch_indices = [element.branch_index for element in self.long_path_elements]
             
             slp_branch_index = long_path_branch_indices.index(slp_index[0])
-            print("Long path branch indices: {0}; SLP on branch {1}".format(long_path_branch_indices, slp_index))
+            self.output_log.append("Long path branch indices: {0}; SLP on branch {1}".format(long_path_branch_indices, slp_index))
             
             # Remove branches in reverse order until that branch
             for long_path_elements_index in range(len(long_path_branch_indices)-1, slp_branch_index, -1):
                 self.RemoveBranch(long_path_elements_index)
             
             # Now remove points in the relevant branch up until the SLP
-            print("Done removing full branches, current branches on the long path: {0}".format([element.branch_index for element in self.long_path_elements]))
+            self.output_log.append("Done removing full branches, current branches on the long path: {0}".format([element.branch_index for element in self.long_path_elements]))
             element = self.long_path_elements[slp_branch_index]
             
             bool_array = PointUtils.ContainsMutualPoints(self.standard_length_point, element.ordered_branch_points_adjusted)
             points_to_remove = element.ordered_branch_points_adjusted[np.where(bool_array)[0][0]+1:]
             length_to_remove = len(points_to_remove) * element.unit_length
-            print("Removing {0} points, representing {1:.2f} pixels".format(len(points_to_remove), length_to_remove))
+            self.output_log.append("Removing {0} points, representing {1:.2f} pixels".format(len(points_to_remove), length_to_remove))
             
             # Reflect these changes in the element itself
             bool_array = PointUtils.ContainsMutualPoints(points_to_remove, element.ordered_branch_points_adjusted)
@@ -320,7 +327,7 @@ class ProcessingInstance():
             
             return True
         else:
-            print("Could not identify SLP branch")
+            self.output_log.append("Could not identify SLP branch")
             return False
 
     def AddContourDistances(self):
@@ -331,25 +338,25 @@ class ProcessingInstance():
         # For the head point, use a circle of radius 20 pixels to find a point further back on the skeleton
         head_pullback_pt = ProcessingInstance.CircleMaskIntersection(self.head_point, self.long_path_pixel_coords, self.dimensions)
         if head_pullback_pt is None:
-            print("Head pullback does not intersect with the long path")
+            self.output_log.append("Head pullback does not intersect with the long path")
             return False
         else:
             pullback_pts.append(head_pullback_pt[0])
-            print("Head pullback point set at {0}".format(head_pullback_pt[0]))
+            self.output_log.append("Head pullback point set at {0}".format(head_pullback_pt[0]))
 
         # For the tail point, use the standard length point if it's not within a 20 pixel radius of the end point
         # otherwise, also use a circle mask
         if (not self.slp_near_endpoint):
             pullback_pts.append(self.standard_length_point)
-            print("Using standard length point for tail pullback, at {0}".format(self.standard_length_point))
+            self.output_log.append("Using standard length point for tail pullback, at {0}".format(self.standard_length_point))
         else:
             tail_pullback_pt = ProcessingInstance.CircleMaskIntersection(self.tail_point, self.long_path_pixel_coords, self.dimensions)
             if tail_pullback_pt is None:
-                print("Tail pullback does not intersect with the long path")
+                self.output_log.append("Tail pullback does not intersect with the long path")
                 return False
             else:
                 pullback_pts.append(tail_pullback_pt[0])
-                print("Using pullback for tail. Tail pullback point set at {0}".format(tail_pullback_pt[0]))
+                self.output_log.append("Using pullback for tail. Tail pullback point set at {0}".format(tail_pullback_pt[0]))
             
         # Run the assessment for each pullback/endpoint pair
         relevant_line_mask = np.zeros(self.dimensions)
@@ -409,7 +416,7 @@ class ProcessingInstance():
             # Draw the line
             distance = 0
             if i == 0:
-                print("Closest boundary point to HEAD endpoint {0}, is {1}".format(end_pt, closest_boundary_point))
+                self.output_log.append("Closest boundary point to HEAD endpoint {0}, is {1}".format(end_pt, closest_boundary_point))
                 
                 # Get the slicing direction right, because numpy's an idiot
                 step_y = 1 if end_pt[0]<=closest_boundary_point[0] else -1
@@ -427,7 +434,7 @@ class ProcessingInstance():
                             end_pt[1]:closest_boundary_point[1]+step_x:step_x]
                 
                 distance = np.linalg.norm(np.asarray(end_pt) - np.asarray(closest_boundary_point))
-                print("Added head line to path, measuring {0:.2f} pixels".format(distance))
+                self.output_log.append("Added head line to path, measuring {0:.2f} pixels".format(distance))
                 
                 # image = cv2.resize(current_array, None, fy=0.5, fx=0.5)
                 # cv2.imshow("head added", image)
@@ -437,7 +444,7 @@ class ProcessingInstance():
                 # Assessing the tail
                 # If using the SLP, draw from the SLP to the closest boundary point. Otherwise, draw from tail endpoint
                 if not self.slp_near_endpoint:
-                    print("Closest boundary point to TAIL SLP {0}, is {1}".format(pullback_pt, closest_boundary_point))
+                    self.output_log.append("Closest boundary point to TAIL SLP {0}, is {1}".format(pullback_pt, closest_boundary_point))
                     step_y = 1 if pullback_pt[0]<=closest_boundary_point[0] else -1
                     step_x = 1 if pullback_pt[1]<=closest_boundary_point[1] else -1
                     if pullback_pt[1] == closest_boundary_point[1]:
@@ -454,7 +461,7 @@ class ProcessingInstance():
                     
                     distance = np.linalg.norm(np.asarray(pullback_pt) - np.asarray(closest_boundary_point))
                 else:
-                    print("Closest boundary point to TAIL endpoint {0}, is {1}".format(end_pt, closest_boundary_point))
+                    self.output_log.append("Closest boundary point to TAIL endpoint {0}, is {1}".format(end_pt, closest_boundary_point))
                     step_y = 1 if end_pt[0]<=closest_boundary_point[0] else -1
                     step_x = 1 if end_pt[1]<=closest_boundary_point[1] else -1
                     if end_pt[1] == closest_boundary_point[1]:
@@ -471,7 +478,7 @@ class ProcessingInstance():
                     
                     distance = np.linalg.norm(np.asarray(end_pt) - np.asarray(closest_boundary_point))
                 
-                print("Added tail line to path, measuring {0:.2f} pixels".format(distance))
+                self.output_log.append("Added tail line to path, measuring {0:.2f} pixels".format(distance))
 
             self.fil_length_pixels += distance
         
@@ -535,7 +542,7 @@ class ProcessingInstance():
         
         return branches
             
-    def GetBranchIntersections(branch_index, filament, also_indices=False):
+    def GetBranchIntersections(self, branch_index, filament, also_indices=False):
         """ Find the coordinates of the supplied filament's intersection points upon the branch at the supplied branch index, if any
 
         Args:
@@ -561,13 +568,13 @@ class ProcessingInstance():
                     intersec_pts_on_branch.append(point)
                     intersec_pts_on_branch_indices.append(i)
         
-        print("Branch at index: {0} contains the following intersection points: {1}".format(branch_index, intersec_pts_on_branch))
+        self.output_log.append("Branch at index: {0} contains the following intersection points: {1}".format(branch_index, intersec_pts_on_branch))
         if not also_indices:
             return intersec_pts_on_branch
         else:
             return intersec_pts_on_branch, intersec_pts_on_branch_indices
 
-    def GetBranchEndPoints(branch_index, filament, also_indices=False):
+    def GetBranchEndPoints(self, branch_index, filament, also_indices=False):
         """ Find the coordinates of the supplied filament's end points upon the branch at the supplied branch index, if any
 
         Args:
@@ -589,13 +596,13 @@ class ProcessingInstance():
                 end_pts_on_branch.append(end_pt)
                 end_pts_on_branch_indices.append(i)
                         
-        print("Branch at index: {0} contains the following end points: {1}".format(branch_index, end_pts_on_branch))
+        self.output_log.append("Branch at index: {0} contains the following end points: {1}".format(branch_index, end_pts_on_branch))
         if not also_indices:
             return end_pts_on_branch
         else:
             return end_pts_on_branch, end_pts_on_branch_indices
 
-    def FindHeadPoint(filament, distance_transform):
+    def FindHeadPoint(self, filament, distance_transform):
         """ Find the head point of the skeleton, defined as the end point with maximal distance to the fish boundary
         
         Args:
@@ -619,18 +626,18 @@ class ProcessingInstance():
             if head_point is None:
                 head_point = contending_pt
             else:
-                print("head_point dist: {0}; contending_pt dist: {1}".format(distance_transform[head_point], distance_transform[contending_pt]))
+                self.output_log.append("head_point dist: {0}; contending_pt dist: {1}".format(distance_transform[head_point], distance_transform[contending_pt]))
                 if distance_transform[contending_pt] > distance_transform[head_point]:
                     head_point = contending_pt
 
-        print("Head point: {0}".format(head_point))
+        self.output_log.append("Head point: {0}".format(head_point))
         return head_point
         
     def ConstructOrderedLongPathCoordinates(self):
-        print("Constructing pixel list")
+        self.output_log.append("Constructing pixel list")
         
         if len(self.long_path_elements) == 1:
-            print("Simple construction")
+            self.output_log.append("Simple construction")
             element = self.long_path_elements[0]
             element.head_point = self.head_point
             element.tail_point = self.tail_point
@@ -638,23 +645,23 @@ class ProcessingInstance():
             if not self.AddBranch(element):
                 return False
         else:
-            print("Advanced construction")
+            self.output_log.append("Advanced construction")
             for i in range(len(self.long_path_elements)):
                 element = self.long_path_elements[i]
                 
                 if i==0:
-                    print("Considering long path element {0} corresponding to base branch {1}".format(i, element.branch_index))
+                    self.output_log.append("Considering long path element {0} corresponding to base branch {1}".format(i, element.branch_index))
                     element.head_point = self.head_point
                 else:
                     base_element = self.long_path_elements[i-1]
-                    print("Considering long path element {0} corresponding to base branch {1} and current branch {2}".format(i, base_element.branch_index, element.branch_index))
+                    self.output_log.append("Considering long path element {0} corresponding to base branch {1} and current branch {2}".format(i, base_element.branch_index, element.branch_index))
                     
                     # Get the shared intersection point
                     shared_intersection = None
                     for base_intersec_point in base_element.intersection_pts:
                         for contender_intersec_point in self.long_path_elements[i].intersection_pts:
                             if (PointUtils.PointInNeighborhood(contender_intersec_point, base_intersec_point)):
-                                print("Found shared intersection point at {0}".format(base_intersec_point))
+                                self.output_log.append("Found shared intersection point at {0}".format(base_intersec_point))
                                 shared_intersection = base_intersec_point
                                 break
                             
@@ -674,7 +681,7 @@ class ProcessingInstance():
 
                     if i == len(self.long_path_elements)-1:
                         # We're in the final branch and need to handle this branch also
-                        print("Adding final branch")
+                        self.output_log.append("Adding final branch")
                         element.tail_point = element.end_pts[-1]
                         if not element.tail_point:
                             return False
@@ -704,7 +711,7 @@ class ProcessingInstance():
         self.long_path_pixel_coords = self.long_path_pixel_coords[np.where(np.invert(bool_array))]
         self.fil_length_pixels -= element.total_adjusted_length
         
-        print("Removed branch {0} with length {1:.2f}".format(element.branch_index, element.total_adjusted_length))
+        self.output_log.append("Removed branch {0} with length {1:.2f}".format(element.branch_index, element.total_adjusted_length))
         
         # Finally, remove this from the long path element list
         del self.long_path_elements[index]

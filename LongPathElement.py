@@ -73,4 +73,5 @@ class LongPathElement:
         else:
             print("Head point is at the beginning of the list")
         
+        ### RETURN LOCAL LIST OF STRINGS, AND APPEND TO INSTANCE LIST
         return True
