@@ -348,30 +348,31 @@ class TkinterApp():
         ## There will only ever be one at a time, as interruption errors end the analysis and 
         ## therefore architecturally preclude the raising of additional interruption errors.
         ## App should resume normal functionality as the analysis thread will close cleanly
-        if self.measurer_instance.errors["interrupt"]:
-            # Don't raise the pop-up if it's already been raised for this event
-            if not self.interrupt_already_popped:
-                self.interrupt_already_popped = True
-                tk.messagebox.showerror("Analysis Error", self.measurer_instance.errors["interrupt"][0])
-                self.measurer_instance.errors["interrupt"] = []
-        else:
-            self.interrupt_already_popped = False
-        
-        # START-BLOCK ERRORS
-        if self.measurer_instance.block_tkinter_start_button:
-            if not self.SBInCorrectState:
-                self.StartButtonState()
+        if self.measurer_instance is not None:
+            if self.measurer_instance.errors["interrupt"]:
+                # Don't raise the pop-up if it's already been raised for this event
+                if not self.interrupt_already_popped:
+                    self.interrupt_already_popped = True
+                    tk.messagebox.showerror("Analysis Error", self.measurer_instance.errors["interrupt"][0])
+                    self.measurer_instance.errors["interrupt"] = []
+            else:
+                self.interrupt_already_popped = False
             
-            # Don't raise the pop-up if it's already been raised for this event
-            if not self.block_start_already_popped:
-                self.block_start_already_popped = True
-                tk.messagebox.showerror("Shape is Missing!", "Failing to register any objects in the arena (quite the feat). Please ensure an object is present and contrasted against the trained background")
-        else:
-            if not self.SBInCorrectState:
-                self.StartButtonState()
-            self.block_start_already_popped = False
-            
-        self.backgroundButton.after(100, self.StartCheckingForErrors)
+            # START-BLOCK ERRORS
+            if self.measurer_instance.block_tkinter_start_button:
+                if not self.SBInCorrectState:
+                    self.StartButtonState()
+                
+                # Don't raise the pop-up if it's already been raised for this event
+                if not self.block_start_already_popped:
+                    self.block_start_already_popped = True
+                    tk.messagebox.showerror("Shape is Missing!", "Failing to register any objects in the arena (quite the feat). Please ensure an object is present and contrasted against the trained background")
+            else:
+                if not self.SBInCorrectState:
+                    self.StartButtonState()
+                self.block_start_already_popped = False
+                
+            self.backgroundButton.after(100, self.StartCheckingForErrors)
     
     def StartButtonState(self):
         if self.current_state == 0:
@@ -380,6 +381,8 @@ class TkinterApp():
             self.startButton.configure(bg="#74B224", state="normal")
         elif self.current_state == 2:
             self.startButton.configure(bg="grey50", state="disabled")
+        
+        self.startButton.configure(text='START')
     
     def BackgroundButtonState(self, disable=False):
         if not disable:
@@ -443,6 +446,9 @@ class TkinterApp():
         self.BackgroundButtonState()
         self.StartButtonState()
         
+        if TkinterApp.numberFramesSetting.GetValue() < 3:
+            TkinterApp.numberFramesSetting.ChangeValue(3)
+            
         TkinterApp.numberFramesSetting.Activate(False)
         TkinterApp.fishIDEntry["state"] = "disabled"
         TkinterApp.additionalText["state"] = "disabled"
@@ -463,14 +469,14 @@ class TkinterApp():
             if not MeasurerInstance.processingFrame:
                 self.startButton["text"] = "COLLECTING..."
             else:
-                self.startButton["text"] = "FRAME " + str(MeasurerInstance.processingFrame + 1) + "/" + str(int(Cameras.number_of_frames))
+                self.startButton["text"] = "PROCESSED: {0}/{1}".format(MeasurerInstance.completed_threads + 1, int(Cameras.number_of_frames))
             
             self.startButton.after(500, self.ReinstateSettings, thread)
         else:
             self.current_state = 1
             MeasurerInstance.stop = False
             
-            print("Reinstating settings")
+            print("Reinstating settings\n")
             TkinterApp.numberFramesSetting.Activate(True)
             self.BackgroundButtonState()
             self.StartButtonState()

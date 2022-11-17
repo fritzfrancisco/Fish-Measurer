@@ -63,11 +63,11 @@ class Cameras():
         
     def ConnectMeasurer(measurer):
         Cameras.active_measurer = measurer
-        print("connected measurer")
+        print("Connected measurer")
     
     def DisconnectMeasurer():
         Cameras.active_measurer = None
-        print("disconnect")
+        print("Disconnecting measurer")
         
     def StopGrabbing():
         try:
@@ -120,6 +120,7 @@ class Cameras():
             Cameras.connected = False # will automatically shut down app in constructor
     
     def TriggerAnalysis():
+        print("Pulling measurement frames")
         Cameras.active_measurer.Analyze(Cameras.GetFixedNumFrames(Cameras.number_of_frames))
     
     def SetNewFrame(frame):

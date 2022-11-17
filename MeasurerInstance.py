@@ -39,6 +39,7 @@ class MeasurerInstance():
         # Iterative Instancing
         MeasurerInstance.processingFrame = None
         MeasurerInstance.trial_count = 0
+        MeasurerInstance.completed_threads = 0
         
         Cameras.ConnectMeasurer(self)
 
@@ -65,6 +66,7 @@ class MeasurerInstance():
         return self.im_bw
         
     def TrainBackground(self):
+        print("Pulling background frames")
         self.pulling_background = True
         (background_images, empty) = Cameras.GetFixedNumFrames(Cameras.framerate * 1)
         self.pulling_background = False
@@ -93,52 +95,31 @@ class MeasurerInstance():
                 instances.append(current_measurement)
                 
         # create a thread pool with the default number of worker threads
+        MeasurerInstance.completed_threads = 0
         executor = cf.ThreadPoolExecutor()
         
         # https://stackoverflow.com/questions/67219755/python-threadpoolexecutor-map-with-instance-methods
         if not MeasurerInstance.stop:              
+            # Construct the list of futures (async runners), each future corresponding to the processing of a single frame
             futures = [executor.submit(instance.ConstructLongestPath) for instance in instances]
             
-            # Wait for all tasks to complete
-            # done, not_done =  cf.wait(futures)
-            
+            # Process results as they come in
             for future in cf.as_completed(futures):
-                # get the result for the next completed task
+                MeasurerInstance.completed_threads += 1
+                
                 instance = future.result() # blocks
-                if instance.successful_pathing:
-                    self.measurements.append(instance)
-                    print("\n".join(instance.output_log))
-                    print("Frame: {0}; length (pix): {1:.2f}; length (cm): {2:.2f}".format(instance.process_id, instance.fil_length_pixels, Cameras.ConvertPixelsToLength(instance.fil_length_pixels)))
+                if isinstance(instance, ProcessingInstance):
+                    if instance.successful_pathing:
+                        self.measurements.append(instance)
+                        print("\n".join(instance.output_log))
+                        print("Frame: {0}; length (pix): {1:.2f}; length (cm): {2:.2f}".format(instance.process_id, instance.fil_length_pixels, Cameras.ConvertPixelsToLength(instance.fil_length_pixels)))
 
-                    # Save the images
-                    cv2.imwrite(os.path.join(self.raw_folder, "raw-{0}{1}".format(instance.process_id, self.format)), instance.raw_frame)
-                    cv2.imwrite(os.path.join(self.skeleton_LP_folder, "skeleton_LP-{0}{1}".format(instance.process_id, self.format)), instance.skeleton_contour)
+                        # Save the images
+                        cv2.imwrite(os.path.join(self.raw_folder, "raw-{0}{1}".format(instance.process_id, self.format)), instance.raw_frame)
+                        cv2.imwrite(os.path.join(self.skeleton_LP_folder, "skeleton_LP-{0}{1}".format(instance.process_id, self.format)), instance.skeleton_contour)
         
             executor.shutdown()
        
-                
-            
-            # for instance in done.result():
-            #     if instance.successful_pathing:
-            #         self.measurements.append(current_measurement)
-            #         print("Frame: {0}; length (pix): {1:.2f}; length (cm): {2:.2f}".format(i, current_measurement.fil_length_pixels, Cameras.ConvertPixelsToLength(current_measurement.fil_length_pixels)))
-
-            #         # Save the images
-            #         cv2.imwrite(os.path.join(self.raw_folder, "raw-{0}{1}".format(current_measurement.process_id, self.format)), current_measurement.raw_frame)
-            #         cv2.imwrite(os.path.join(self.skeleton_LP_folder, "skeleton_LP-{0}{1}".format(current_measurement.process_id, self.format)), current_measurement.skeleton_contour)
-        
-       
-            # # Initialize the frame processing instance
-            # if current_measurement.successful_init and not MeasurerInstance.stop:               
-            #     # Add it to the pool if successfully initialized
-            #     if current_measurement.ConstructLongestPath() and not MeasurerInstance.stop:
-            #         self.measurements.append(current_measurement)
-            #         print("Frame: {0}; length (pix): {1:.2f}; length (cm): {2:.2f}".format(i, current_measurement.fil_length_pixels, Cameras.ConvertPixelsToLength(current_measurement.fil_length_pixels)))
-
-            #         # Save the images
-            #         cv2.imwrite(os.path.join(self.raw_folder, "raw-{0}{1}".format(current_measurement.process_id, self.format)), current_measurement.raw_frame)
-            #         cv2.imwrite(os.path.join(self.skeleton_LP_folder, "skeleton_LP-{0}{1}".format(current_measurement.process_id, self.format)), current_measurement.skeleton_contour)
-        
         # For Tkinter ReinstateSettings()                    
         MeasurerInstance.processingFrame = None
         
@@ -148,7 +129,7 @@ class MeasurerInstance():
                 refined_list = MeasurerInstance.RunStatistics(self.measurements)
                 MeasurerInstance.trial_count = len(refined_list)
                 
-                if not refined_list:
+                if len(refined_list) < 2:
                     # Effectively interrupts the flow, the method ends after this block
                     print("All lengths filtered out!")
                     error_message = "The lengths obtained are too variant to be consolidated (the variance is too high). The data is unreliable and will not be saved, please re-measure"
@@ -216,7 +197,7 @@ class MeasurerInstance():
         length_stats = (statistics.mean([instance.fil_length_pixels for instance in measurements]), statistics.stdev([instance.fil_length_pixels for instance in measurements]))
         
         # Export the data to .csv
-        df = pd.DataFrame(data={"frame_number": [instance.process_id for instance in measurements], "length_pix": [instance.fil_length_pixels for instance in measurements], "length_cm": [Cameras.ConvertPixelsToLength(instance.fil_length_pixels) for instance in measurements], "pixel_count_cm": [Cameras.ConvertPixelsToLength(len(instance.long_path_pixel_coords)) for instance in measurements]})
+        df = pd.DataFrame(data={"frame_number": [instance.process_id for instance in measurements], "length_in_pixels": [instance.fil_length_pixels for instance in measurements], "filfinder_length": [Cameras.ConvertPixelsToLength(instance.fil_length_pixels) for instance in measurements], "pixel_count_length": [Cameras.ConvertPixelsToLength(len(instance.long_path_pixel_coords)) for instance in measurements], "pixel_distance_length": [Cameras.ConvertPixelsToLength(instance.manual_length) for instance in measurements]})
         df.to_csv(os.path.join(target_folder_name, "data-output.csv"), sep=';',index=False) 
         
         # Find the instance with the closest length value

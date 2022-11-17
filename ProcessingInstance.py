@@ -43,6 +43,7 @@ class ProcessingInstance():
         self.covered_intersec_pt_indices = []
         self.number_of_branches = None
         self.long_path_pixel_coords = []
+        self.manual_length = 0
         
         # list of tuples (branch_index, intersection_pt_indices)
         self.long_path_elements = []
@@ -138,6 +139,9 @@ class ProcessingInstance():
         self.output_log.append("Adding contour distances...")
         if not self.AddContourDistances():
             return False
+        
+        # Perform the manual calculation for comparison purposes
+        self.manual_length = PointUtils.CalculateLength(self.long_path_pixel_coords)
         
         # Draw the picture
         self.long_path_binary[self.long_path_pixel_coords[:,0], self.long_path_pixel_coords[:,1]] = 1
@@ -697,9 +701,10 @@ class ProcessingInstance():
         if not element.ProcessElement(base_branch_points, branch_length):
             return False
         else:
-            # Record the length and save the coords
+            # Record the length, save the coords, and add the output messages to the log
             self.long_path_pixel_coords.extend(list(map(tuple, element.ordered_branch_points_adjusted)))
             self.fil_length_pixels += element.total_adjusted_length
+            self.output_log.extend(element.return_messages)
             
             return True
     

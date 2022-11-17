@@ -20,6 +20,9 @@ class LongPathElement:
         self.total_pixel_length = 0
         self.total_adjusted_length = 0
         self.unit_length = 0
+        
+        # Return messages
+        self.return_messages = []
     
     def ProcessElement(self, base_branch_points, base_branch_length):
         """Orders and trims the constitutive branch based on the head and tail points (set externally) which serve as connectivity points with the adjacent branches
@@ -40,7 +43,7 @@ class LongPathElement:
         self.total_pixel_length = base_branch_length
         self.total_adjusted_length = base_branch_length
         self.unit_length = self.total_pixel_length / len(self.ordered_branch_points_full)
-        print("Branch contains {0} points and is {1:.2f} pixels long".format(np.shape(self.ordered_branch_points_full)[0], self.total_pixel_length))
+        self.return_messages.append("Branch contains {0} points and is {1:.2f} pixels long".format(np.shape(self.ordered_branch_points_full)[0], self.total_pixel_length))
         
         # Determine if the head and tail points are at the extremes of the branch or not and adjust accoringly
         if not PointUtils.PointInNeighborhood(self.tail_point, self.ordered_branch_points_adjusted[-1]):
@@ -54,9 +57,9 @@ class LongPathElement:
             trimmed_length = (len(self.ordered_branch_points_adjusted) - tail_index) * self.unit_length
             self.total_adjusted_length -= trimmed_length
             self.ordered_branch_points_adjusted = self.ordered_branch_points_adjusted[:tail_index+1, :]
-            print("Tail index is mid-branch, trimming {0:.2f} pixels".format(trimmed_length))
+            self.return_messages.append("Tail index is mid-branch, trimming {0:.2f} pixels".format(trimmed_length))
         else:
-            print("Tail point is at the end of the list")
+            self.return_messages.append("Tail point is at the end of the list")
             
         if not PointUtils.PointInNeighborhood(self.head_point, self.ordered_branch_points_adjusted[0]):
             # The head point occurs somewhere mid-branch, we need to trim up until that point
@@ -69,9 +72,8 @@ class LongPathElement:
             trimmed_length = head_index * self.unit_length
             self.total_adjusted_length -= trimmed_length
             self.ordered_branch_points_adjusted = self.ordered_branch_points_adjusted[head_index:, :]
-            print("Head index is mid-branch, trimming {0:.2f} pixels".format(trimmed_length))
+            self.return_messages.append("Head index is mid-branch, trimming {0:.2f} pixels".format(trimmed_length))
         else:
-            print("Head point is at the beginning of the list")
+            self.return_messages.append("Head point is at the beginning of the list")
         
-        ### RETURN LOCAL LIST OF STRINGS, AND APPEND TO INSTANCE LIST
         return True

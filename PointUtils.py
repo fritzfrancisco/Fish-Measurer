@@ -72,3 +72,18 @@ def OptimizePath(coords, start=None):
         path.append(nearest)
         pass_by.remove(nearest)
     return path
+
+def CalculateLength(coords):
+    count = len(coords)
+    total_length = 0
+    
+    # We don't need to consider the last point in the list, here
+    for i in range(count-1):
+        this_point = coords[i]
+        next_point = coords[i+1]
+        
+        total_length += abs(Distance(this_point, next_point))
+    
+    return total_length
+        
+    
