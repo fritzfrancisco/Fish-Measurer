@@ -144,7 +144,8 @@ class MeasurerInstance():
                     
                 if error_message not in MeasurerInstance.errors["interrupt"]:
                     MeasurerInstance.errors["interrupt"].append(error_message)
-                
+            
+        MeasurerInstance.completed_threads = 0
                 
     def WatermarkImage(instance, length_stats=None):
         # Watermark the closest result

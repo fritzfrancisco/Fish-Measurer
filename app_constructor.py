@@ -297,7 +297,7 @@ class TkinterApp():
                         command=ShowChoice,
                         value=val).grid(row = 0, column = val, sticky='ew', padx=5)  
         
-        TkinterApp.numberFramesSetting = DigitEntry("Number of Frames: ", 3, 1, innerStartFrame, trace="numberFrames", lower=0)
+        TkinterApp.numberFramesSetting = DigitEntry("Number of Frames: ", 10, 1, innerStartFrame, trace="numberFrames", lower=0)
     
         self.startButton = tk.Button(startFrame, text='START', command=self.StartButtonClick, bg="grey50", font=("Courier", 24), fg="white", state="disabled", disabledforeground="white")
         self.startButton.pack(fill=tk.BOTH, pady=5)
@@ -446,7 +446,8 @@ class TkinterApp():
         self.BackgroundButtonState()
         self.StartButtonState()
         
-        if TkinterApp.numberFramesSetting.GetValue() < 3:
+        if int(float(TkinterApp.numberFramesSetting.GetValue())) < 3:
+            print("Correcting selected number of frames")
             TkinterApp.numberFramesSetting.ChangeValue(3)
             
         TkinterApp.numberFramesSetting.Activate(False)
