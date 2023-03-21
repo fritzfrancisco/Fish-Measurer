@@ -611,11 +611,12 @@ class ProcessingInstance():
         
         Args:
             filament (Filfinder filament): The filament in which the branches to be searched thorugh exist
-            distance_transform (np.ndarray): An array of size self.dimensions, at every cell of which is the distance to the fish boundary
+            distance_transform (np.ndarray): An array of size self.dimensions, at every cell of which is the distance from that cell to the fish boundary
 
         Returns:
             tuple: The (y,x) coordinate of the head point set in the dimensional space of self.dimensions
         """
+        
         # Find the starting point: the skeleton end point in the head
         contending_pt = None
         head_point = None
